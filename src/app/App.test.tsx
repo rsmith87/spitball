@@ -71,6 +71,11 @@ vi.mock("../neuraxis/diagnostics", () => ({
   })),
 }));
 
+vi.mock("../neuraxis/chat", () => ({
+  sendChat: vi.fn(async () => "assistant ok"),
+  streamChat: vi.fn(),
+}));
+
 describe("App setup profile", () => {
   afterEach(() => {
     cleanup();
@@ -96,5 +101,35 @@ describe("App setup profile", () => {
 
     await waitFor(() => expect(saveProfile).toHaveBeenCalled());
     expect(saveProfile.mock.calls[0][0]).toMatchObject({ apiKey: "nxa_saved_key" });
+  });
+
+  it("sends with Enter and keeps Shift Enter as a newline", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "line one");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect((composer as HTMLTextAreaElement).value).toBe("line one\n");
+
+    await user.type(composer, "line two");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("assistant ok")).not.toBeNull());
+  });
+
+  it("collapses the setup pane into a reopen rail", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByLabelText("Collapse setup pane"));
+
+    expect(screen.queryByText("Backend URL")).toBeNull();
+    expect(screen.getByLabelText("Open setup pane")).not.toBeNull();
+
+    await user.click(screen.getByLabelText("Open setup pane"));
+
+    expect(screen.getByText("Backend URL")).not.toBeNull();
   });
 });

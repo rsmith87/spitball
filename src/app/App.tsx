@@ -1,5 +1,6 @@
-import { CheckCircle2, Database, Download, KeyRound, Loader2, MessageSquare, PlugZap, Send, ShieldCheck, XCircle } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, Database, Download, KeyRound, Loader2, MessageSquare, PanelRightClose, PanelRightOpen, PlugZap, Send, ShieldCheck, XCircle } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { getClientDiscovery } from "../neuraxis/discovery";
 import { getClientSession } from "../neuraxis/session";
 import { listModels } from "../neuraxis/models";
@@ -32,6 +33,8 @@ export function App() {
   const [activeId, setActiveId] = useState("");
   const [draft, setDraft] = useState(DEFAULT_MESSAGE);
   const [isSending, setIsSending] = useState(false);
+  const [setupCollapsed, setSetupCollapsed] = useState(false);
+  const messagesRef = useRef<HTMLDivElement | null>(null);
 
   const auth = useMemo<AuthState | null>(() => (apiKey ? { mode: "external_api_key", apiKey } : null), [apiKey]);
   const activeConversation = conversations.find((item) => item.id === activeId) || conversations[0];
@@ -54,6 +57,12 @@ export function App() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    const container = messagesRef.current;
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+  }, [activeConversation?.messages, isSending]);
 
   async function runSetup() {
     setIsChecking(true);
@@ -147,6 +156,12 @@ export function App() {
     }
   }
 
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    event.preventDefault();
+    void sendMessage();
+  }
+
   function downloadArchive() {
     const blob = new Blob([exportConversations(conversations)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -158,7 +173,7 @@ export function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${setupCollapsed ? "setup-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">N</div>
@@ -213,7 +228,7 @@ export function App() {
           </div>
         </header>
 
-        <div className="messages">
+        <div className="messages" ref={messagesRef}>
           {(activeConversation?.messages || []).length === 0 ? (
             <div className="welcome">
               <ShieldCheck size={36} />
@@ -230,7 +245,12 @@ export function App() {
         </div>
 
         <footer className="composer">
-          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Send a message to your private backend" />
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleComposerKeyDown}
+            placeholder="Send a message to your private backend"
+          />
           <button onClick={() => void sendMessage()} disabled={!auth || !selectedModel || isSending}>
             {isSending ? <Loader2 className="spin" size={17} /> : <Send size={17} />} Send
           </button>
@@ -238,57 +258,83 @@ export function App() {
       </section>
 
       <form
-        className="diagnostics"
+        className={`diagnostics ${setupCollapsed ? "collapsed" : ""}`}
         onSubmit={(event) => {
           event.preventDefault();
           void runSetup();
         }}
       >
-        <div className="panel-heading">
-          <PlugZap size={18} />
-          <h2>Setup</h2>
-        </div>
-        <label>
-          Backend URL
-          <input value={backendUrl} onChange={(event) => setBackendUrl(event.target.value)} />
-        </label>
-        <input className="visually-hidden" autoComplete="username" value="external-app-key" readOnly />
-        <label>
-          External app key
-          <input value={apiKey} type="password" autoComplete="current-password" onChange={(event) => setApiKey(event.target.value)} />
-        </label>
-        <label className="checkbox-row">
-          <input
-            aria-label="Remember key on this device"
-            checked={rememberKey}
-            type="checkbox"
-            onChange={(event) => setRememberKey(event.target.checked)}
-          />
-          <span>
-            Remember key on this device
-            <small>Stored in this browser profile until Electron keychain support is added.</small>
-          </span>
-        </label>
-        <button className="primary" type="submit" disabled={isChecking}>
-          {isChecking ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />} Test connection
-        </button>
-        {setupError ? <div className="error-box">{setupError}</div> : null}
-        <CheckRow label="Discovery" passed={Boolean(discovery)} />
-        <CheckRow label="Authenticated session" passed={Boolean(session)} />
-        <CheckRow label="Model usable" passed={diagnostic?.checks.modelUsable} />
-        <CheckRow label="Route resolved" passed={diagnostic?.checks.routeResolved} />
-        <CheckRow label="Chat diagnostic" passed={diagnostic?.checks.chat} />
-        <CheckRow label="Streaming" passed={diagnostic?.checks.streaming} />
+        {setupCollapsed ? (
+          <button
+            aria-label="Open setup pane"
+            className="setup-rail-button"
+            type="button"
+            onClick={() => setSetupCollapsed(false)}
+            title="Open setup"
+          >
+            <PanelRightOpen size={18} />
+            <span>Setup</span>
+          </button>
+        ) : (
+          <>
+            <div className="panel-heading">
+              <div className="panel-title">
+                <PlugZap size={18} />
+                <h2>Setup</h2>
+              </div>
+              <button
+                aria-label="Collapse setup pane"
+                className="icon-button"
+                type="button"
+                onClick={() => setSetupCollapsed(true)}
+                title="Collapse setup"
+              >
+                <PanelRightClose size={17} />
+              </button>
+            </div>
+            <label>
+              Backend URL
+              <input value={backendUrl} onChange={(event) => setBackendUrl(event.target.value)} />
+            </label>
+            <input className="visually-hidden" autoComplete="username" value="external-app-key" readOnly />
+            <label>
+              External app key
+              <input value={apiKey} type="password" autoComplete="current-password" onChange={(event) => setApiKey(event.target.value)} />
+            </label>
+            <label className="checkbox-row">
+              <input
+                aria-label="Remember key on this device"
+                checked={rememberKey}
+                type="checkbox"
+                onChange={(event) => setRememberKey(event.target.checked)}
+              />
+              <span>
+                Remember key on this device
+                <small>Stored in this browser profile until Electron keychain support is added.</small>
+              </span>
+            </label>
+            <button className="primary" type="submit" disabled={isChecking}>
+              {isChecking ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />} Test connection
+            </button>
+            {setupError ? <div className="error-box">{setupError}</div> : null}
+            <CheckRow label="Discovery" passed={Boolean(discovery)} />
+            <CheckRow label="Authenticated session" passed={Boolean(session)} />
+            <CheckRow label="Model usable" passed={diagnostic?.checks.modelUsable} />
+            <CheckRow label="Route resolved" passed={diagnostic?.checks.routeResolved} />
+            <CheckRow label="Chat diagnostic" passed={diagnostic?.checks.chat} />
+            <CheckRow label="Streaming" passed={diagnostic?.checks.streaming} />
 
-        <div className="route-box">
-          <span>Route</span>
-          <strong>{diagnostic?.route?.route || "Not resolved"}</strong>
-          <small>{diagnostic?.route?.node || "No node selected"}</small>
-        </div>
+            <div className="route-box">
+              <span>Route</span>
+              <strong>{diagnostic?.route?.route || "Not resolved"}</strong>
+              <small>{diagnostic?.route?.node || "No node selected"}</small>
+            </div>
 
-        <button className="secondary" onClick={downloadArchive}>
-          <Download size={16} /> Export local archive
-        </button>
+            <button className="secondary" onClick={downloadArchive}>
+              <Download size={16} /> Export local archive
+            </button>
+          </>
+        )}
       </form>
     </main>
   );
