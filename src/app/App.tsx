@@ -6,6 +6,7 @@ import { getClientSession } from "../spitball/session";
 import { listModels } from "../spitball/models";
 import { runChatDiagnostics } from "../spitball/diagnostics";
 import { getContextBudget, sendChat, streamChat } from "../spitball/chat";
+import { createBackendProject, listBackendProjects } from "../spitball/projects";
 import type { AuthState, ChatDiagnostic, ChatMessage, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
 import { getProfile, listConversations, listProjects, saveConversation, saveProfile, saveProject } from "../storage";
@@ -208,6 +209,11 @@ export function App() {
         cachedModels: safeModels,
       });
       setConnectionStatus("ready");
+      if (discovered.mode === "controller") {
+        void refreshBackendProjects(backendUrl, auth).catch((error) => {
+          setSetupError(error instanceof Error ? error.message : "Project sync failed.");
+        });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Setup failed";
       setSetupError(message);
@@ -234,19 +240,28 @@ export function App() {
     const root = projectRoot.trim();
     if (!name || !root) return;
     const now = new Date().toISOString();
-    const project: Project = {
-      id: newId("project"),
-      name,
-      root,
-      createdAt: now,
-      updatedAt: now,
-    };
+    const project: Project = connectionStatus === "ready" && auth
+      ? await createBackendProject(backendUrl, auth, { name, root })
+      : {
+          id: newId("project"),
+          name,
+          root,
+          createdAt: now,
+          updatedAt: now,
+        };
     await saveProject(project);
     setProjects((items) => [project, ...items.filter((item) => item.id !== project.id)]);
     setSelectedProjectId(project.id);
     setProjectsExpanded(false);
     setProjectName("");
     setProjectRoot("");
+  }
+
+  async function refreshBackendProjects(currentBackendUrl: string, currentAuth: AuthState) {
+    const backendProjects = await listBackendProjects(currentBackendUrl, currentAuth);
+    await Promise.all(backendProjects.map((project) => saveProject(project)));
+    setProjects((items) => mergeProjects(backendProjects, items));
+    if (backendProjects[0]) setSelectedProjectId((current) => current || backendProjects[0].id);
   }
 
   async function sendMessage() {
@@ -627,6 +642,11 @@ function CheckRow({ label, passed }: { label: string; passed?: boolean | null })
 function upsertConversation(items: Conversation[], conversation: Conversation): Conversation[] {
   const next = [conversation, ...items.filter((item) => item.id !== conversation.id)];
   return next.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function mergeProjects(primary: Project[], fallback: Project[]): Project[] {
+  const seen = new Set(primary.map((item) => item.id));
+  return [...primary, ...fallback.filter((item) => !seen.has(item.id))].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 function withAssistantMessage(conversation: Conversation, message: ChatMessage): Conversation {
