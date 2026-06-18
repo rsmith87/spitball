@@ -6,6 +6,6 @@ export function exportConversations(conversations: Conversation[]): string {
 
 export function importConversations(text: string): Conversation[] {
   const payload = JSON.parse(text);
-  if (!Array.isArray(payload.conversations)) throw new Error("Invalid Neuraxis Chat archive");
+  if (!Array.isArray(payload.conversations)) throw new Error("Invalid Spitball archive");
   return payload.conversations as Conversation[];
 }

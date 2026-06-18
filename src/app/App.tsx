@@ -1,20 +1,33 @@
-import { CheckCircle2, Database, Download, KeyRound, Loader2, MessageSquare, PanelRightClose, PanelRightOpen, PlugZap, Send, ShieldCheck, XCircle } from "lucide-react";
+import { CheckCircle2, Database, Download, FileText, KeyRound, Loader2, MessageSquare, Moon, PanelRightClose, PanelRightOpen, PlugZap, Send, ShieldCheck, Sun, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
-import { getClientDiscovery } from "../neuraxis/discovery";
-import { getClientSession } from "../neuraxis/session";
-import { listModels } from "../neuraxis/models";
-import { runChatDiagnostics } from "../neuraxis/diagnostics";
-import { sendChat, streamChat } from "../neuraxis/chat";
-import type { AuthState, ChatDiagnostic, ChatMessage, ClientDiscovery, ClientModel, ClientSession } from "../neuraxis/types";
+import { getClientDiscovery } from "../spitball/discovery";
+import { getClientSession } from "../spitball/session";
+import { listModels } from "../spitball/models";
+import { runChatDiagnostics } from "../spitball/diagnostics";
+import { getContextBudget, sendChat, streamChat } from "../spitball/chat";
+import { summarizePath } from "../spitball/projectContext";
+import type { AuthState, ChatDiagnostic, ChatMessage, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
 import { getProfile, listConversations, saveConversation, saveProfile } from "../storage/indexedDbStorage";
 import type { ConnectionProfile, Conversation } from "../storage/types";
+import spitballLogo from "../styles/spitball-logo.png";
 
 const DEFAULT_MESSAGE = "Ask a private model about the current project.";
+const DEFAULT_MAX_TOKENS = 512;
 
 function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function formatCompactTokenCount(value: number): string {
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return String(value);
+}
+
+function contextBudgetSummary(budget: ContextBudget): string {
+  const used = budget.prompt_tokens_estimated + budget.reserved_completion_tokens;
+  return `Context: ${formatCompactTokenCount(used)} / ${formatCompactTokenCount(budget.context_window_tokens)} used · ${formatCompactTokenCount(budget.remaining_context_tokens)} left`;
 }
 
 export function App() {
@@ -26,20 +39,45 @@ export function App() {
   const [models, setModels] = useState<ClientModel[]>([]);
   const [selectedModel, setSelectedModel] = useState("");
   const [requestType, setRequestType] = useState<string | null>(null);
+  const [agentToolsEnabled, setAgentToolsEnabled] = useState(false);
   const [diagnostic, setDiagnostic] = useState<ChatDiagnostic | null>(null);
   const [setupError, setSetupError] = useState("");
+  const [projectContextPath, setProjectContextPath] = useState("");
+  const [projectContextContent, setProjectContextContent] = useState("");
+  const [projectContextSummary, setProjectContextSummary] = useState("");
+  const [projectContextError, setProjectContextError] = useState("");
+  const [isSummarizingContext, setIsSummarizingContext] = useState(false);
+  const [contextBudget, setContextBudget] = useState<ContextBudget | null>(null);
+  const [contextBudgetError, setContextBudgetError] = useState("");
   const [isChecking, setIsChecking] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeId, setActiveId] = useState("");
   const [draft, setDraft] = useState(DEFAULT_MESSAGE);
   const [isSending, setIsSending] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    try {
+      return localStorage.getItem("spitball-theme") === "dark";
+    } catch {
+      return false;
+    }
+  });
   const [setupCollapsed, setSetupCollapsed] = useState(false);
   const messagesRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark-mode", darkMode);
+    try {
+      localStorage.setItem("spitball-theme", darkMode ? "dark" : "light");
+    } catch {
+      // localStorage unavailable (e.g. test environment, private browsing)
+    }
+  }, [darkMode]);
 
   const auth = useMemo<AuthState | null>(() => (apiKey ? { mode: "external_api_key", apiKey } : null), [apiKey]);
   const activeConversation = conversations.find((item) => item.id === activeId) || conversations[0];
   const model = models.find((item) => item.id === selectedModel);
   const availableRequestTypes = model?.metadata.request_types || [];
+  const canUseProjectContext = Boolean(session?.capabilities.projectContext && session.projectContext?.actions.includes("summarize_path"));
 
   useEffect(() => {
     void listConversations().then((items) => {
@@ -64,6 +102,32 @@ export function App() {
     container.scrollTop = container.scrollHeight;
   }, [activeConversation?.messages, isSending]);
 
+  useEffect(() => {
+    if (!auth || !selectedModel || isSending || !draft.trim()) {
+      setContextBudget(null);
+      setContextBudgetError("");
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      const messages = [...(activeConversation?.messages || []), { role: "user" as const, content: draft.trim() }];
+      getContextBudget(
+        backendUrl,
+        auth,
+        { model: selectedModel, request_type: requestType, stream: false, messages },
+        DEFAULT_MAX_TOKENS,
+      )
+        .then((budget) => {
+          setContextBudget(budget);
+          setContextBudgetError("");
+        })
+        .catch((error) => {
+          setContextBudget(null);
+          setContextBudgetError(error instanceof Error ? error.message : "Context budget unavailable.");
+        });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [activeConversation?.messages, auth, backendUrl, draft, isSending, requestType, selectedModel]);
+
   async function runSetup() {
     setIsChecking(true);
     setSetupError("");
@@ -74,17 +138,19 @@ export function App() {
       if (!auth) throw new Error("Enter an external app key before continuing.");
       const currentSession = await getClientSession(backendUrl, auth);
       const safeModels = currentSession.models.length ? currentSession.models : await listModels(backendUrl, auth);
-      const firstModel = safeModels[0];
-      const firstRequestType = firstModel?.metadata.default_request_type || firstModel?.metadata.request_types[0] || null;
+      const selectedSafeModel = safeModels.find((item) => item.id === selectedModel) || safeModels[0];
+      const selectedRequestType = selectedSafeModel?.metadata.request_types.includes(requestType || "")
+        ? requestType
+        : selectedSafeModel?.metadata.default_request_type || selectedSafeModel?.metadata.request_types[0] || null;
       setSession(currentSession);
       setModels(safeModels);
-      setSelectedModel(firstModel?.id || "");
-      setRequestType(firstRequestType);
-      if (!firstModel) throw new Error("No client-safe models were returned by this backend.");
+      setSelectedModel(selectedSafeModel?.id || "");
+      setRequestType(selectedRequestType);
+      if (!selectedSafeModel) throw new Error("No client-safe models were returned by this backend.");
       const result = await runChatDiagnostics(backendUrl, auth, {
-        model: firstModel.id,
-        request_type: firstRequestType,
-        stream: firstModel.metadata.capabilities.streaming,
+        model: selectedSafeModel.id,
+        request_type: selectedRequestType,
+        stream: selectedSafeModel.metadata.capabilities.streaming,
       });
       setDiagnostic(result);
       if (!result.ok) throw new Error(result.error?.detail || "Chat diagnostics failed.");
@@ -95,8 +161,8 @@ export function App() {
         backendMode: discovered.mode,
         authMode: "external_api_key",
         apiKey: rememberKey ? apiKey : undefined,
-        defaultModel: firstModel.id,
-        requestType: firstRequestType,
+        defaultModel: selectedSafeModel.id,
+        requestType: selectedRequestType,
       });
     } catch (error) {
       setSetupError(error instanceof Error ? error.message : "Setup failed");
@@ -130,11 +196,12 @@ export function App() {
     setIsSending(true);
     try {
       let assistant = "";
-      if (model?.metadata.capabilities.streaming) {
+      const toolRuntime = agentToolsEnabled ? "agent" : undefined;
+      if (model?.metadata.capabilities.streaming && !agentToolsEnabled) {
         await streamChat(
           backendUrl,
           auth,
-          { model: selectedModel, request_type: requestType, stream: true, messages: pending.messages },
+          { model: selectedModel, request_type: requestType, stream: true, messages: pending.messages, tool_runtime: toolRuntime },
           (token) => {
             assistant += token;
             const streamingConversation = withAssistantMessage(pending, assistant);
@@ -142,7 +209,7 @@ export function App() {
           },
         );
       } else {
-        assistant = await sendChat(backendUrl, auth, { model: selectedModel, request_type: requestType, stream: false, messages: pending.messages });
+        assistant = await sendChat(backendUrl, auth, { model: selectedModel, request_type: requestType, stream: false, messages: pending.messages, tool_runtime: toolRuntime });
       }
       const saved = withAssistantMessage(pending, assistant || "(empty response)");
       await saveConversation(saved);
@@ -153,6 +220,28 @@ export function App() {
       setConversations((items) => upsertConversation(items, failed));
     } finally {
       setIsSending(false);
+    }
+  }
+
+  async function summarizeSelectedContext() {
+    if (!auth || !canUseProjectContext || !projectContextPath.trim() || !projectContextContent.trim()) return;
+    setProjectContextError("");
+    setProjectContextSummary("");
+    setIsSummarizingContext(true);
+    try {
+      const response = await summarizePath(backendUrl, auth, {
+        project: { name: "Spitball", root: null },
+        selected_paths: [{ path: projectContextPath.trim(), content: projectContextContent }],
+        artifacts: [],
+        focused_path: projectContextPath.trim(),
+      });
+      const text = formatProjectContextSummary(response.summary.path);
+      setProjectContextSummary(text);
+      setDraft(text);
+    } catch (error) {
+      setProjectContextError(error instanceof Error ? error.message : "Project context failed");
+    } finally {
+      setIsSummarizingContext(false);
     }
   }
 
@@ -176,9 +265,9 @@ export function App() {
     <main className={`app-shell ${setupCollapsed ? "setup-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">N</div>
+          <div className="brand-mark"><img src={spitballLogo} /></div>
           <div>
-            <h1>Neuraxis Chat</h1>
+            <h1>Spitball</h1>
             <p>Local-first private AI client</p>
           </div>
         </div>
@@ -204,9 +293,45 @@ export function App() {
           </div>
         </section>
 
-        <div className="storage-note">
-          <Database size={16} />
-          Browser history uses IndexedDB. Electron history will require encrypted SQLite.
+        <div className="sidebar-footer">
+          <section className="context-box">
+            <div className="context-heading">
+              <FileText size={16} />
+              <span>Project context</span>
+            </div>
+            <label>
+              Project path
+              <input value={projectContextPath} onChange={(event) => setProjectContextPath(event.target.value)} placeholder="packages/spitball/README.md" />
+            </label>
+            <label>
+              Selected content
+              <textarea
+                value={projectContextContent}
+                onChange={(event) => setProjectContextContent(event.target.value)}
+                placeholder="Paste the selected file content or saved artifact notes"
+              />
+            </label>
+            <button
+              className="secondary"
+              type="button"
+              disabled={!canUseProjectContext || !projectContextPath.trim() || !projectContextContent.trim() || isSummarizingContext}
+              onClick={() => void summarizeSelectedContext()}
+            >
+              {isSummarizingContext ? <Loader2 className="spin" size={16} /> : <FileText size={16} />} Summarize context
+            </button>
+            {projectContextSummary ? <div className="context-summary">{projectContextSummary}</div> : null}
+            {projectContextError ? <div className="error-box">{projectContextError}</div> : null}
+          </section>
+
+          <button className="theme-toggle" onClick={() => setDarkMode((prev) => !prev)}>
+            {darkMode ? <Sun size={16} /> : <Moon size={16} />}
+            {darkMode ? "Light mode" : "Dark mode"}
+          </button>
+
+          <div className="storage-note">
+            <Database size={16} />
+            Browser history uses IndexedDB. Electron history will require encrypted SQLite.
+          </div>
         </div>
       </aside>
 
@@ -225,6 +350,15 @@ export function App() {
               <option value="">Request type</option>
               {availableRequestTypes.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
+            <label className="header-checkbox">
+              <input
+                aria-label="Agent tools"
+                checked={agentToolsEnabled}
+                type="checkbox"
+                onChange={(event) => setAgentToolsEnabled(event.target.checked)}
+              />
+              <span>Agent tools</span>
+            </label>
           </div>
         </header>
 
@@ -232,7 +366,7 @@ export function App() {
           {(activeConversation?.messages || []).length === 0 ? (
             <div className="welcome">
               <ShieldCheck size={36} />
-              <h3>Connect to Neuraxis, then chat locally.</h3>
+              <h3>Connect to Llama Pack, then chat locally.</h3>
               <p>Messages are stored on this device by default. The backend only handles runtime, routing, policy, and model execution.</p>
             </div>
           ) : null}
@@ -245,6 +379,14 @@ export function App() {
         </div>
 
         <footer className="composer">
+          {contextBudget ? (
+            <div className={`context-budget context-budget-${contextBudget.status}`} data-testid="spitball-context-budget">
+              <strong>{contextBudgetSummary(contextBudget)}</strong>
+              <small>{contextBudget.precision === "approximate" ? "Approximate estimate" : "Tokenizer estimate"}</small>
+            </div>
+          ) : contextBudgetError ? (
+            <div className="context-budget error" data-testid="spitball-context-budget">{contextBudgetError}</div>
+          ) : null}
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -323,6 +465,7 @@ export function App() {
             <CheckRow label="Route resolved" passed={diagnostic?.checks.routeResolved} />
             <CheckRow label="Chat diagnostic" passed={diagnostic?.checks.chat} />
             <CheckRow label="Streaming" passed={diagnostic?.checks.streaming} />
+            <CheckRow label="Project context" passed={session ? canUseProjectContext : undefined} />
 
             <div className="route-box">
               <span>Route</span>
@@ -338,6 +481,12 @@ export function App() {
       </form>
     </main>
   );
+}
+
+function formatProjectContextSummary(path: { path: string; characters?: number } | undefined): string {
+  if (!path) return "Project context summary is available.";
+  if (typeof path.characters !== "number") return `Project context from ${path.path}.`;
+  return `Project context from ${path.path}: ${path.characters} characters selected.`;
 }
 
 function CheckRow({ label, passed }: { label: string; passed?: boolean | null }) {

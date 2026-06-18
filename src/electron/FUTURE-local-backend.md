@@ -5,7 +5,7 @@ Neuraxis backend. The browser MVP does not implement this.
 
 When implementing Electron packaging, define:
 
-- how the app locates a bundled Neuraxis runtime
+- how the app locates a bundled Llama Pack runtime
 - how it starts and stops the backend process
 - how it runs first-time migrations or onboarding
 - where backend logs are stored

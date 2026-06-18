@@ -1,6 +1,6 @@
-# Neuraxis Chat
+# Spitball
 
-Standalone local-first chat client for Neuraxis backends.
+Standalone local-first chat client for Llama Pack backends.
 
 The app is currently a browser-based MVP built with Vite, React, and TypeScript. It is structured so it can later be packaged with Electron and use desktop storage such as encrypted SQLite and OS keychain credentials.
 
@@ -13,9 +13,9 @@ npm run dev
 
 Vite will print the local URL, usually `http://127.0.0.1:5173/` or the next available port.
 
-## Connect To Neuraxis
+## Connect To Llama Pack
 
-Use a Neuraxis controller URL when possible:
+Use a Llama Pack controller URL when possible:
 
 ```text
 https://pi-controller.local
@@ -29,7 +29,7 @@ The controller should expose:
 - `POST /v1/client/diagnostics/chat`
 - `POST /v1/chat/completions`
 
-Use an external app key created in Neuraxis core. For browser development, the controller must allow the Vite origin in `client_cors_origins`, for example:
+Use an external app key created in Llama Pack core. For browser development, the controller must allow the Vite origin in `client_cors_origins`, for example:
 
 ```yaml
 client_cors_origins:

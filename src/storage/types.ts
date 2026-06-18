@@ -1,4 +1,4 @@
-import type { AuthMode, ChatMessage } from "../neuraxis/types";
+import type { AuthMode, ChatMessage } from "../spitball/types";
 
 export type ConnectionProfile = {
   id: string;

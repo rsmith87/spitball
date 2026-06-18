@@ -1,6 +1,6 @@
 import type { ConnectionProfile, Conversation } from "./types";
 
-const DB_NAME = "neuraxis-chat";
+const DB_NAME = "spitball";
 const DB_VERSION = 1;
 
 function openDb(): Promise<IDBDatabase> {

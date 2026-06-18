@@ -9,7 +9,7 @@ export function joinUrl(baseUrl: string, path: string): string {
 export function authHeaders(auth: AuthState | null): Record<string, string> {
   if (!auth) return {};
   if (auth.mode === "external_api_key" && auth.apiKey) return { "X-Llama-Manager-Key": auth.apiKey };
-  if (auth.mode === "neuraxis_business" && auth.businessToken) return { Authorization: `Bearer ${auth.businessToken}` };
+  if (auth.mode === "llama_pack_business" && auth.businessToken) return { Authorization: `Bearer ${auth.businessToken}` };
   return {};
 }
 
