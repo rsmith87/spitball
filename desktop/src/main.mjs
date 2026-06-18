@@ -1,17 +1,22 @@
-import { app, BrowserWindow, Menu, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, shell } from "electron";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { buildStartAppCommand, isInternalNavigationUrl, resolveDesktopConfig } from "./config.mjs";
+import { deleteSecret, readSecret, saveSecret } from "./keychain.mjs";
 import { buildOfflinePageLoadOptions } from "./offlinePage.mjs";
 import { isAppReachable } from "./readiness.mjs";
+import { SpitballDesktopStorage } from "./storage.mjs";
+import { registerStorageIpc } from "./storageIpc.mjs";
 import { buildWindowOptions } from "./windowOptions.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const desktopConfig = resolveDesktopConfig(process.env);
+const preloadPath = join(moduleDir, "preload.cjs");
+let storage = null;
 
 function createWindow() {
-  return new BrowserWindow(buildWindowOptions());
+  return new BrowserWindow(buildWindowOptions(preloadPath));
 }
 
 async function loadShell(window) {
@@ -34,6 +39,12 @@ async function loadShell(window) {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
+  storage = new SpitballDesktopStorage(
+    join(app.getPath("userData"), "spitball.sqlite3"),
+    { saveSecret, readSecret, deleteSecret },
+    process.platform,
+  );
+  registerStorageIpc(ipcMain, storage);
 
   const window = createWindow();
   window.once("ready-to-show", () => window.show());
@@ -76,4 +87,8 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  storage?.close();
 });

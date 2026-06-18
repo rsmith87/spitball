@@ -5,14 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { getContextBudget, sendChat, streamChat } from "../spitball/chat";
 import { runChatDiagnostics } from "../spitball/diagnostics";
-import { summarizePath } from "../spitball/projectContext";
+import { getProfile } from "../storage";
 
 const savedProfile = {
   id: "default",
   name: "Controller backend",
   backendUrl: "https://pi-controller.local",
   backendMode: "controller",
-  authMode: "external_api_key",
+  authMode: "external_api_key" as const,
   apiKey: "nxa_saved_key",
   defaultModel: "gemma-4-E4B-it",
   requestType: "chat",
@@ -30,7 +30,7 @@ const storedProjects = [
   },
 ];
 
-vi.mock("../storage/indexedDbStorage", () => ({
+vi.mock("../storage", () => ({
   getProfile: vi.fn(async () => savedProfile),
   listConversations: vi.fn(async () => []),
   listProjects: vi.fn(async () => storedProjects),
@@ -45,7 +45,7 @@ vi.mock("../spitball/discovery", () => ({
     version: "test",
     mode: "controller",
     capabilities: { openaiChatCompletions: true, streaming: true, localChatSessions: false, projectContext: true, businessPlugin: false },
-    auth: { methods: ["external_api_key"], sessionHeader: "X-UI-Session", apiKeyHeader: "X-Llama-Manager-Key" },
+    auth: { methods: ["external_api_key"], sessionHeader: "X-UI-Session", apiKeyHeader: "X-Llama-Pack-Key" },
     endpoints: {},
   })),
 }));
@@ -119,20 +119,8 @@ vi.mock("../spitball/chat", () => ({
     precision: "approximate",
     warnings: [],
   })),
-  sendChat: vi.fn(async () => "assistant ok"),
+  sendChat: vi.fn(async () => ({ content: "assistant ok" })),
   streamChat: vi.fn(),
-}));
-
-vi.mock("../spitball/projectContext", () => ({
-  summarizePath: vi.fn(async () => ({
-    action: "summarize_path",
-    policy: "explicit_user_selected_inputs_and_saved_artifact_metadata_only",
-    summary: {
-      project: { name: "Spitball", root: null },
-      path: { path: "packages/spitball/README.md", characters: 12 },
-      artifacts: [],
-    },
-  })),
 }));
 
 describe("App setup profile", () => {
@@ -147,40 +135,77 @@ describe("App setup profile", () => {
     vi.mocked(streamChat).mockClear();
     vi.mocked(getContextBudget).mockClear();
     vi.mocked(runChatDiagnostics).mockClear();
-    vi.mocked(summarizePath).mockClear();
   });
 
+  async function openSettings(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+  }
+
   it("restores a remembered backend URL and app key", async () => {
+    const user = userEvent.setup();
     render(<App />);
 
+    await openSettings(user);
     expect(await screen.findByDisplayValue("https://pi-controller.local")).not.toBeNull();
     expect(await screen.findByDisplayValue("nxa_saved_key")).not.toBeNull();
+  });
+
+  it("hydrates a validated saved connection as ready", async () => {
+    vi.mocked(getProfile).mockResolvedValueOnce({
+      ...savedProfile,
+      validatedAt: "2026-06-18T10:00:00.000Z",
+      cachedModels: [
+        {
+          id: "gemma-4-E4B-it",
+          object: "model",
+          owned_by: "spitball",
+          metadata: {
+            display_label: "Gemma",
+            request_types: ["chat"],
+            default_request_type: "chat",
+            context_identity: "gemma-4-E4B-it",
+            model_family: "gemma-4-E4B-it",
+            context_profile: null,
+            capabilities: { streaming: true, json_schema: false, grammar: false, vision: false },
+          },
+        },
+      ],
+    });
+    render(<App />);
+
+    expect(await screen.findByText("Connection ready")).not.toBeNull();
+    await waitFor(() => expect(getContextBudget).toHaveBeenCalled());
   });
 
   it("saves the app key only when remember key is enabled", async () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await openSettings(user);
     expect(await screen.findByLabelText("Remember key on this device")).toHaveProperty("checked", true);
     await user.click(screen.getByRole("button", { name: /test connection/i }));
 
     await waitFor(() => expect(saveProfile).toHaveBeenCalled());
-    expect(saveProfile.mock.calls[0][0]).toMatchObject({ apiKey: "nxa_saved_key" });
+    expect(saveProfile.mock.calls[0][0]).toMatchObject({ apiKey: "nxa_saved_key", validatedAt: expect.any(String) });
   });
 
   it("keeps the selected model when testing the connection again", async () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await openSettings(user);
     await user.click(screen.getByRole("button", { name: /test connection/i }));
     await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(1));
 
+    await user.click(screen.getByRole("button", { name: "New conversation" }));
     await user.selectOptions(screen.getAllByRole("combobox")[0], "qwen-coder");
+    await openSettings(user);
     await user.click(screen.getByRole("button", { name: /test connection/i }));
 
     await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(2));
     expect(saveProfile.mock.calls[1][0]).toMatchObject({ defaultModel: "qwen-coder" });
     expect(vi.mocked(runChatDiagnostics).mock.calls[1][2]).toMatchObject({ model: "qwen-coder" });
+    await user.click(screen.getByRole("button", { name: "New conversation" }));
     expect(screen.getByDisplayValue("Qwen Coder")).not.toBeNull();
   });
 
@@ -200,12 +225,40 @@ describe("App setup profile", () => {
     await waitFor(() => expect(screen.getByText("assistant ok")).not.toBeNull());
   });
 
+  it("shows analytics chips for assistant responses", async () => {
+    vi.mocked(sendChat).mockResolvedValueOnce({
+      content: "assistant measured",
+      telemetry: {
+        promptTokens: 42,
+        completionTokens: 10,
+        promptMs: 55,
+        completionMs: 500,
+        tokensPerSecond: 20,
+      },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText("Agent tools"));
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "measure this");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("assistant measured")).not.toBeNull());
+    expect(screen.getByText("tok/s: 20.00")).not.toBeNull();
+    expect(screen.getByText("prompt_toks: 42")).not.toBeNull();
+    expect(screen.getByText("gen_toks: 10")).not.toBeNull();
+  });
+
   it("shows the current context budget above the composer", async () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await openSettings(user);
     await user.click(screen.getByRole("button", { name: /test connection/i }));
     await waitFor(() => expect(saveProfile).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: "New conversation" }));
     const composer = await screen.findByPlaceholderText("Send a message to your private backend");
     await user.clear(composer);
     await user.type(composer, "budget this");
@@ -232,8 +285,10 @@ describe("App setup profile", () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await openSettings(user);
     await user.click(screen.getByRole("button", { name: /test connection/i }));
     await waitFor(() => expect(saveProfile).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: "New conversation" }));
     const composer = await screen.findByPlaceholderText("Send a message to your private backend");
     await user.clear(composer);
     await user.type(composer, "large context");
@@ -261,8 +316,10 @@ describe("App setup profile", () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await openSettings(user);
     await user.click(screen.getByRole("button", { name: /test connection/i }));
     await waitFor(() => expect(saveProfile).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: "New conversation" }));
     await user.click(await screen.findByLabelText("Agent tools"));
     const composer = await screen.findByPlaceholderText("Send a message to your private backend");
     await user.clear(composer);
@@ -274,59 +331,57 @@ describe("App setup profile", () => {
     expect(vi.mocked(sendChat).mock.calls[0][2]).toMatchObject({ stream: false, tool_runtime: "agent" });
   });
 
-  it("collapses the setup pane into a reopen rail", async () => {
+  it("opens setup controls from the Settings sidebar item", async () => {
     const user = userEvent.setup();
     render(<App />);
-
-    await user.click(screen.getByLabelText("Collapse setup pane"));
 
     expect(screen.queryByText("Backend URL")).toBeNull();
-    expect(screen.getByLabelText("Open setup pane")).not.toBeNull();
 
-    await user.click(screen.getByLabelText("Open setup pane"));
+    await user.click(screen.getByRole("button", { name: "Settings" }));
 
+    expect(screen.getByRole("heading", { name: "Settings" })).not.toBeNull();
     expect(screen.getByText("Backend URL")).not.toBeNull();
+    expect(screen.getByRole("button", { name: /test connection/i })).not.toBeNull();
   });
 
-  it("summarizes explicit project context into the composer", async () => {
-    const user = userEvent.setup();
+  it("does not render the legacy manual project context form", () => {
     render(<App />);
 
-    await user.click(screen.getByRole("button", { name: /test connection/i }));
-    await waitFor(() => expect(saveProfile).toHaveBeenCalled());
-
-    await user.type(screen.getByLabelText("Project path"), "packages/spitball/README.md");
-    await user.type(screen.getByLabelText("Selected content"), "# Spitball");
-    await user.click(screen.getByRole("button", { name: /summarize context/i }));
-
-    await waitFor(() => expect(summarizePath).toHaveBeenCalled());
-    expect(vi.mocked(summarizePath).mock.calls[0][2]).toMatchObject({
-      selected_paths: [{ path: "packages/spitball/README.md", content: "# Spitball" }],
-      focused_path: "packages/spitball/README.md",
-    });
-    expect((screen.getByPlaceholderText("Send a message to your private backend") as HTMLTextAreaElement).value).toBe(
-      "Project context from packages/spitball/README.md: 12 characters selected.",
-    );
+    expect(screen.queryByText("Project context")).toBeNull();
+    expect(screen.queryByLabelText("Project path")).toBeNull();
+    expect(screen.queryByLabelText("Selected content")).toBeNull();
   });
 
-  it("places project context in the left sidebar", () => {
-    const { container } = render(<App />);
-
-    const sidebar = container.querySelector(".sidebar");
-
-    expect(sidebar?.textContent).toContain("Project context");
-    expect(sidebar?.textContent?.indexOf("Project context")).toBeLessThan(sidebar?.textContent?.indexOf("Browser history uses IndexedDB") ?? -1);
-  });
-
-  it("restores stored projects and shows safe-dir guidance", async () => {
+  it("restores stored projects and shows project indicators", async () => {
     render(<App />);
 
     expect(await screen.findByText("Llama Pack")).not.toBeNull();
     expect(screen.getByText("/Users/robertsmith/Apps/llama-pack")).not.toBeNull();
     expect(screen.getByText(/Backend tools can use this project only after its root is allowed in Llama Pack safe dirs/i)).not.toBeNull();
+    expect(screen.getByText("Project: Llama Pack")).not.toBeNull();
+    expect(document.querySelector(".app-shell.project-active")).not.toBeNull();
   });
 
-  it("adds a local project and selects it", async () => {
+  it("collapses and expands projects from the sidebar", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const toggle = await screen.findByRole("button", { name: /projects/i });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    await user.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByLabelText("Project name")).toBeNull();
+    expect(screen.getByText("Selected project: Llama Pack")).not.toBeNull();
+
+    await user.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByLabelText("Project name")).not.toBeNull();
+  });
+
+  it("adds a local project, selects it, and updates the global indicator", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -339,7 +394,7 @@ describe("App setup profile", () => {
       name: "Website",
       root: "/Users/robertsmith/Apps/website",
     });
-    expect(await screen.findByText("Website")).not.toBeNull();
-    expect(screen.getByText("Selected project: Website")).not.toBeNull();
+    await waitFor(() => expect(document.body.textContent).toContain("Selected project: Website"));
+    expect(document.body.textContent).toContain("Project: Website");
   });
 });

@@ -1,6 +1,6 @@
 import { authHeaders, joinUrl, requestJson } from "./http";
-import type { AuthState, ChatMessage, ContextBudget } from "./types";
-import { parseSseContent } from "./streaming";
+import type { AuthState, ChatMessage, ChatTelemetry, ContextBudget } from "./types";
+import { parseSseContent, telemetryFromPayload, type ChatStreamDelta } from "./streaming";
 
 export type ChatCompletionRequest = {
   model: string;
@@ -8,6 +8,11 @@ export type ChatCompletionRequest = {
   request_type?: string | null;
   stream: boolean;
   tool_runtime?: "agent";
+};
+
+export type ChatCompletionResult = {
+  content: string;
+  telemetry?: ChatTelemetry;
 };
 
 export async function getContextBudget(
@@ -31,10 +36,10 @@ export async function getContextBudget(
   );
 }
 
-export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCompletionRequest): Promise<string> {
-  let payload: { choices: Array<{ message: { content: string } }> };
+export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCompletionRequest): Promise<ChatCompletionResult> {
+  let payload: { choices: Array<{ message: { content: string } }>; usage?: Record<string, unknown>; timings?: Record<string, unknown> };
   try {
-    payload = await requestJson<{ choices: Array<{ message: { content: string } }> }>(
+    payload = await requestJson<{ choices: Array<{ message: { content: string } }>; usage?: Record<string, unknown>; timings?: Record<string, unknown> }>(
       baseUrl,
       "/v1/chat/completions",
       { method: "POST", body: JSON.stringify(request) },
@@ -43,14 +48,18 @@ export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCo
   } catch (error) {
     throw formatChatError(error, request);
   }
-  return payload.choices[0]?.message?.content || "";
+  const telemetry = telemetryFromPayload(payload);
+  return {
+    content: payload.choices[0]?.message?.content || "",
+    ...(telemetry ? { telemetry } : {}),
+  };
 }
 
 export async function streamChat(
   baseUrl: string,
   auth: AuthState,
   request: ChatCompletionRequest,
-  onToken: (token: string) => void,
+  onToken: (delta: ChatStreamDelta) => void,
 ): Promise<void> {
   const response = await fetch(joinUrl(baseUrl, "/v1/chat/completions"), {
     method: "POST",

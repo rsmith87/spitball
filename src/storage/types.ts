@@ -1,4 +1,4 @@
-import type { AuthMode, ChatMessage } from "../spitball/types";
+import type { AuthMode, ChatMessage, ClientModel } from "../spitball/types";
 
 export type ConnectionProfile = {
   id: string;
@@ -9,6 +9,9 @@ export type ConnectionProfile = {
   apiKey?: string;
   defaultModel: string;
   requestType: string | null;
+  validatedAt?: string;
+  lastConnectionError?: string;
+  cachedModels?: ClientModel[];
 };
 
 export type Conversation = {

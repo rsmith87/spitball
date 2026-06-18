@@ -1,4 +1,4 @@
-import { CheckCircle2, Database, Download, FileText, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, PanelRightClose, PanelRightOpen, PlugZap, Send, ShieldCheck, Sun, XCircle } from "lucide-react";
+import { CheckCircle2, Database, Download, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, PlugZap, Send, Settings, ShieldCheck, Sun, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { getClientDiscovery } from "../spitball/discovery";
@@ -6,15 +6,15 @@ import { getClientSession } from "../spitball/session";
 import { listModels } from "../spitball/models";
 import { runChatDiagnostics } from "../spitball/diagnostics";
 import { getContextBudget, sendChat, streamChat } from "../spitball/chat";
-import { summarizePath } from "../spitball/projectContext";
-import type { AuthState, ChatDiagnostic, ChatMessage, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
+import type { AuthState, ChatDiagnostic, ChatMessage, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
-import { getProfile, listConversations, listProjects, saveConversation, saveProfile, saveProject } from "../storage/indexedDbStorage";
+import { getProfile, listConversations, listProjects, saveConversation, saveProfile, saveProject } from "../storage";
 import type { ConnectionProfile, Conversation, Project } from "../storage/types";
 import spitballLogo from "../styles/spitball-logo.png";
 
 const DEFAULT_MESSAGE = "Ask a private model about the current project.";
 const DEFAULT_MAX_TOKENS = 512;
+type ConnectionStatus = "missing" | "loaded" | "checking" | "ready" | "failed";
 
 function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -36,6 +36,25 @@ function contextBudgetWarning(budget: ContextBudget): string {
   return "";
 }
 
+function telemetryChips(message: ChatMessage): string[] {
+  const telemetry = message.telemetry || {};
+  return [
+    telemetry.tokensPerSecond != null ? `tok/s: ${telemetry.tokensPerSecond.toFixed(2)}` : null,
+    telemetry.ttftMs != null ? `ttft: ${telemetry.ttftMs.toFixed(0)}ms` : null,
+    telemetry.totalMs != null ? `total: ${telemetry.totalMs.toFixed(0)}ms` : null,
+    telemetry.promptTokens != null ? `prompt_toks: ${telemetry.promptTokens}` : null,
+    telemetry.completionTokens != null ? `gen_toks: ${telemetry.completionTokens}` : null,
+  ].filter(Boolean) as string[];
+}
+
+function connectionStatusLabel(status: ConnectionStatus): string {
+  if (status === "ready") return "Connection ready";
+  if (status === "checking") return "Checking connection";
+  if (status === "failed") return "Connection check failed";
+  if (status === "loaded") return "Saved connection loaded";
+  return "Connection not configured";
+}
+
 export function App() {
   const [backendUrl, setBackendUrl] = useState("http://mac-mini.local");
   const [apiKey, setApiKey] = useState("");
@@ -48,20 +67,18 @@ export function App() {
   const [agentToolsEnabled, setAgentToolsEnabled] = useState(false);
   const [diagnostic, setDiagnostic] = useState<ChatDiagnostic | null>(null);
   const [setupError, setSetupError] = useState("");
-  const [projectContextPath, setProjectContextPath] = useState("");
-  const [projectContextContent, setProjectContextContent] = useState("");
-  const [projectContextSummary, setProjectContextSummary] = useState("");
-  const [projectContextError, setProjectContextError] = useState("");
-  const [isSummarizingContext, setIsSummarizingContext] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("missing");
   const [contextBudget, setContextBudget] = useState<ContextBudget | null>(null);
   const [contextBudgetError, setContextBudgetError] = useState("");
   const [isChecking, setIsChecking] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [projectName, setProjectName] = useState("");
   const [projectRoot, setProjectRoot] = useState("");
   const [activeId, setActiveId] = useState("");
+  const [activeView, setActiveView] = useState<"chat" | "settings">("chat");
   const [draft, setDraft] = useState(DEFAULT_MESSAGE);
   const [isSending, setIsSending] = useState(false);
   const [darkMode, setDarkMode] = useState(() => {
@@ -71,7 +88,6 @@ export function App() {
       return false;
     }
   });
-  const [setupCollapsed, setSetupCollapsed] = useState(false);
   const messagesRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -88,7 +104,6 @@ export function App() {
   const selectedProject = projects.find((item) => item.id === selectedProjectId) || projects[0] || null;
   const model = models.find((item) => item.id === selectedModel);
   const availableRequestTypes = model?.metadata.request_types || [];
-  const canUseProjectContext = Boolean(session?.capabilities.projectContext && session.projectContext?.actions.includes("summarize_path"));
   const contextPressureClass = contextBudget ? `context-pressure-${contextBudget.status}` : "context-pressure-empty";
 
   useEffect(() => {
@@ -105,10 +120,13 @@ export function App() {
       setBackendUrl(profile.backendUrl);
       setSelectedModel(profile.defaultModel);
       setRequestType(profile.requestType);
+      setModels(profile.cachedModels || []);
+      setSetupError(profile.lastConnectionError || "");
       if (profile.apiKey) {
         setApiKey(profile.apiKey);
         setRememberKey(true);
       }
+      setConnectionStatus(profile.validatedAt && profile.apiKey && profile.defaultModel ? "ready" : "loaded");
     });
   }, []);
 
@@ -119,7 +137,7 @@ export function App() {
   }, [activeConversation?.messages, isSending]);
 
   useEffect(() => {
-    if (!auth || !selectedModel || isSending || !draft.trim()) {
+    if (connectionStatus !== "ready" || !auth || !selectedModel || isSending || !draft.trim()) {
       setContextBudget(null);
       setContextBudgetError("");
       return;
@@ -142,10 +160,17 @@ export function App() {
         });
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [activeConversation?.messages, auth, backendUrl, draft, isSending, requestType, selectedModel]);
+  }, [activeConversation?.messages, auth, backendUrl, connectionStatus, draft, isSending, requestType, selectedModel]);
+
+  function markConnectionEdited() {
+    if (connectionStatus !== "missing") setConnectionStatus("loaded");
+    setSetupError("");
+    setDiagnostic(null);
+  }
 
   async function runSetup() {
     setIsChecking(true);
+    setConnectionStatus("checking");
     setSetupError("");
     setDiagnostic(null);
     try {
@@ -179,9 +204,26 @@ export function App() {
         apiKey: rememberKey ? apiKey : undefined,
         defaultModel: selectedSafeModel.id,
         requestType: selectedRequestType,
+        validatedAt: new Date().toISOString(),
+        cachedModels: safeModels,
       });
+      setConnectionStatus("ready");
     } catch (error) {
-      setSetupError(error instanceof Error ? error.message : "Setup failed");
+      const message = error instanceof Error ? error.message : "Setup failed";
+      setSetupError(message);
+      setConnectionStatus("failed");
+      await saveProfile({
+        id: "default",
+        name: "Saved backend",
+        backendUrl,
+        backendMode: discovery?.mode || "unknown",
+        authMode: "external_api_key",
+        apiKey: rememberKey ? apiKey : undefined,
+        defaultModel: selectedModel,
+        requestType,
+        lastConnectionError: message,
+        cachedModels: models,
+      });
     } finally {
       setIsChecking(false);
     }
@@ -202,6 +244,7 @@ export function App() {
     await saveProject(project);
     setProjects((items) => [project, ...items.filter((item) => item.id !== project.id)]);
     setSelectedProjectId(project.id);
+    setProjectsExpanded(false);
     setProjectName("");
     setProjectRoot("");
   }
@@ -231,52 +274,59 @@ export function App() {
     setIsSending(true);
     try {
       let assistant = "";
+      const startedAtMs = performance.now();
+      let firstTokenAtMs: number | undefined;
+      let streamTelemetry: ChatTelemetry | undefined;
       const toolRuntime = agentToolsEnabled ? "agent" : undefined;
       if (model?.metadata.capabilities.streaming && !agentToolsEnabled) {
         await streamChat(
           backendUrl,
           auth,
           { model: selectedModel, request_type: requestType, stream: true, messages: pending.messages, tool_runtime: toolRuntime },
-          (token) => {
-            assistant += token;
-            const streamingConversation = withAssistantMessage(pending, assistant);
+          (delta) => {
+            assistant += delta.content;
+            if (!firstTokenAtMs && delta.content) firstTokenAtMs = performance.now();
+            streamTelemetry = mergeTelemetry(streamTelemetry, delta.telemetry);
+            const streamingMessage = finalizeAssistantMessage({
+              role: "assistant",
+              content: assistant,
+              startedAtMs,
+              firstTokenAtMs,
+              telemetry: streamTelemetry,
+            });
+            const streamingConversation = withAssistantMessage(pending, streamingMessage);
             setConversations((items) => upsertConversation(items, streamingConversation));
           },
         );
       } else {
-        assistant = await sendChat(backendUrl, auth, { model: selectedModel, request_type: requestType, stream: false, messages: pending.messages, tool_runtime: toolRuntime });
+        const result = await sendChat(backendUrl, auth, { model: selectedModel, request_type: requestType, stream: false, messages: pending.messages, tool_runtime: toolRuntime });
+        assistant = result.content;
+        const saved = withAssistantMessage(pending, finalizeAssistantMessage({
+          role: "assistant",
+          content: assistant || "(empty response)",
+          startedAtMs,
+          firstTokenAtMs: performance.now(),
+          telemetry: result.telemetry,
+        }));
+        await saveConversation(saved);
+        setConversations((items) => upsertConversation(items, saved));
+        return;
       }
-      const saved = withAssistantMessage(pending, assistant || "(empty response)");
+        const saved = withAssistantMessage(pending, finalizeAssistantMessage({
+          role: "assistant",
+          content: assistant || "(empty response)",
+          startedAtMs,
+          firstTokenAtMs,
+          telemetry: streamTelemetry,
+        }));
       await saveConversation(saved);
       setConversations((items) => upsertConversation(items, saved));
     } catch (error) {
-      const failed = withAssistantMessage(pending, error instanceof Error ? error.message : "Chat failed");
+      const failed = withAssistantMessage(pending, { role: "assistant", content: error instanceof Error ? error.message : "Chat failed" });
       await saveConversation(failed);
       setConversations((items) => upsertConversation(items, failed));
     } finally {
       setIsSending(false);
-    }
-  }
-
-  async function summarizeSelectedContext() {
-    if (!auth || !canUseProjectContext || !projectContextPath.trim() || !projectContextContent.trim()) return;
-    setProjectContextError("");
-    setProjectContextSummary("");
-    setIsSummarizingContext(true);
-    try {
-      const response = await summarizePath(backendUrl, auth, {
-        project: { name: "Spitball", root: null },
-        selected_paths: [{ path: projectContextPath.trim(), content: projectContextContent }],
-        artifacts: [],
-        focused_path: projectContextPath.trim(),
-      });
-      const text = formatProjectContextSummary(response.summary.path);
-      setProjectContextSummary(text);
-      setDraft(text);
-    } catch (error) {
-      setProjectContextError(error instanceof Error ? error.message : "Project context failed");
-    } finally {
-      setIsSummarizingContext(false);
     }
   }
 
@@ -297,7 +347,7 @@ export function App() {
   }
 
   return (
-    <main className={`app-shell ${setupCollapsed ? "setup-collapsed" : ""}`}>
+    <main className={`app-shell ${selectedProject ? "project-active" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><img src={spitballLogo} /></div>
@@ -307,7 +357,13 @@ export function App() {
           </div>
         </div>
 
-        <button className="new-chat" onClick={() => setActiveId("")}>
+        <button
+          className="new-chat"
+          onClick={() => {
+            setActiveId("");
+            setActiveView("chat");
+          }}
+        >
           <MessageSquare size={16} /> New conversation
         </button>
 
@@ -319,7 +375,10 @@ export function App() {
               <button
                 className={`conversation-row ${conversation.id === activeConversation?.id ? "active" : ""}`}
                 key={conversation.id}
-                onClick={() => setActiveId(conversation.id)}
+                onClick={() => {
+                  setActiveId(conversation.id);
+                  setActiveView("chat");
+                }}
               >
                 <span>{conversation.title}</span>
                 <small>{conversation.model}</small>
@@ -329,73 +388,65 @@ export function App() {
         </section>
 
         <div className="sidebar-footer">
+          <button
+            className={`sidebar-nav-button ${activeView === "settings" ? "active" : ""}`}
+            type="button"
+            onClick={() => setActiveView("settings")}
+          >
+            <Settings size={16} /> Settings
+          </button>
           <section className="context-box project-box">
-            <div className="context-heading">
+            <button
+              className="context-heading project-toggle"
+              type="button"
+              aria-expanded={projectsExpanded}
+              onClick={() => setProjectsExpanded((value) => !value)}
+            >
               <FolderOpen size={16} />
               <span>Projects</span>
-            </div>
-            <label>
-              Project name
-              <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Llama Pack" />
-            </label>
-            <label>
-              Project root
-              <input value={projectRoot} onChange={(event) => setProjectRoot(event.target.value)} placeholder="/Users/robertsmith/Apps/llama-pack" />
-            </label>
-            <button
-              className="secondary"
-              type="button"
-              disabled={!projectName.trim() || !projectRoot.trim()}
-              onClick={() => void addProject()}
-            >
-              <FolderOpen size={16} /> Add project
+              <span className={`collapse-chevron ${projectsExpanded ? "open" : ""}`} aria-hidden="true" />
             </button>
-            <div className="project-list">
-              {projects.length === 0 ? <p className="empty">No projects saved yet.</p> : null}
-              {projects.map((project) => (
-                <button
-                  className={`project-row ${project.id === selectedProject?.id ? "active" : ""}`}
-                  key={project.id}
-                  type="button"
-                  onClick={() => setSelectedProjectId(project.id)}
-                >
-                  <span>{project.name}</span>
-                  <small>{project.root}</small>
-                </button>
-              ))}
-            </div>
             {selectedProject ? <div className="context-summary">Selected project: {selectedProject.name}</div> : null}
-            <div className="safe-dir-note">
-              Backend tools can use this project only after its root is allowed in Llama Pack safe dirs.
-            </div>
-          </section>
-          <section className="context-box">
-            <div className="context-heading">
-              <FileText size={16} />
-              <span>Project context</span>
-            </div>
-            <label>
-              Project path
-              <input value={projectContextPath} onChange={(event) => setProjectContextPath(event.target.value)} placeholder="packages/spitball/README.md" />
-            </label>
-            <label>
-              Selected content
-              <textarea
-                value={projectContextContent}
-                onChange={(event) => setProjectContextContent(event.target.value)}
-                placeholder="Paste the selected file content or saved artifact notes"
-              />
-            </label>
-            <button
-              className="secondary"
-              type="button"
-              disabled={!canUseProjectContext || !projectContextPath.trim() || !projectContextContent.trim() || isSummarizingContext}
-              onClick={() => void summarizeSelectedContext()}
-            >
-              {isSummarizingContext ? <Loader2 className="spin" size={16} /> : <FileText size={16} />} Summarize context
-            </button>
-            {projectContextSummary ? <div className="context-summary">{projectContextSummary}</div> : null}
-            {projectContextError ? <div className="error-box">{projectContextError}</div> : null}
+            {projectsExpanded ? (
+              <>
+                <label>
+                  Project name
+                  <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Llama Pack" />
+                </label>
+                <label>
+                  Project root
+                  <input value={projectRoot} onChange={(event) => setProjectRoot(event.target.value)} placeholder="/Users/robertsmith/Apps/llama-pack" />
+                </label>
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={!projectName.trim() || !projectRoot.trim()}
+                  onClick={() => void addProject()}
+                >
+                  <FolderOpen size={16} /> Add project
+                </button>
+                <div className="project-list">
+                  {projects.length === 0 ? <p className="empty">No projects saved yet.</p> : null}
+                  {projects.map((project) => (
+                    <button
+                      className={`project-row ${project.id === selectedProject?.id ? "active" : ""}`}
+                      key={project.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedProjectId(project.id);
+                        setProjectsExpanded(false);
+                      }}
+                    >
+                      <span>{project.name}</span>
+                      <small>{project.root}</small>
+                    </button>
+                  ))}
+                </div>
+                <div className="safe-dir-note">
+                  Backend tools can use this project only after its root is allowed in Llama Pack safe dirs.
+                </div>
+              </>
+            ) : null}
           </section>
 
           <button className="theme-toggle" onClick={() => setDarkMode((prev) => !prev)}>
@@ -410,11 +461,14 @@ export function App() {
         </div>
       </aside>
 
+      {activeView === "chat" ? (
       <section className={`chat-panel ${contextPressureClass}`}>
         <header className="chat-header">
           <div>
             <h2>{activeConversation?.title || "New private chat"}</h2>
-            <p>{discovery ? `${discovery.mode} backend • ${selectedModel || "no model selected"}` : "Connect a backend to start"}</p>
+            <p>{discovery ? `${discovery.mode} backend • ${selectedModel || "no model selected"}` : `${connectionStatusLabel(connectionStatus)} • ${selectedModel || "no model selected"}`}</p>
+            {selectedProject ? <div className="project-indicator">Project: {selectedProject.name}</div> : null}
+            <div className={`connection-indicator connection-${connectionStatus}`}>{connectionStatusLabel(connectionStatus)}</div>
           </div>
           <div className="header-actions">
             <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>
@@ -448,6 +502,11 @@ export function App() {
           {activeConversation?.messages.map((message, index) => (
             <article key={`${message.role}-${index}`} className={`message ${message.role}`}>
               <div className="message-role">{message.role}</div>
+              {telemetryChips(message).length ? (
+                <div className="message-chips">
+                  {telemetryChips(message).map((chip) => <span className="message-chip" key={chip}>{chip}</span>)}
+                </div>
+              ) : null}
               <p>{message.content}</p>
             </article>
           ))}
@@ -474,50 +533,46 @@ export function App() {
           </button>
         </footer>
       </section>
-
-      <form
-        className={`diagnostics ${setupCollapsed ? "collapsed" : ""}`}
-        onSubmit={(event) => {
-          event.preventDefault();
-          void runSetup();
-        }}
-      >
-        {setupCollapsed ? (
-          <button
-            aria-label="Open setup pane"
-            className="setup-rail-button"
-            type="button"
-            onClick={() => setSetupCollapsed(false)}
-            title="Open setup"
-          >
-            <PanelRightOpen size={18} />
-            <span>Setup</span>
-          </button>
-        ) : (
-          <>
+      ) : (
+      <section className="settings-panel">
+        <form
+          className="diagnostics"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void runSetup();
+          }}
+        >
             <div className="panel-heading">
               <div className="panel-title">
                 <PlugZap size={18} />
-                <h2>Setup</h2>
+                <h2>Settings</h2>
               </div>
-              <button
-                aria-label="Collapse setup pane"
-                className="icon-button"
-                type="button"
-                onClick={() => setSetupCollapsed(true)}
-                title="Collapse setup"
-              >
-                <PanelRightClose size={17} />
-              </button>
+              {selectedProject ? <div className="project-indicator">Project: {selectedProject.name}</div> : null}
             </div>
             <label>
               Backend URL
-              <input value={backendUrl} onChange={(event) => setBackendUrl(event.target.value)} />
+              <input
+                value={backendUrl}
+                onChange={(event) => {
+                  setBackendUrl(event.target.value);
+                  markConnectionEdited();
+                }}
+              />
             </label>
             <input className="visually-hidden" autoComplete="username" value="external-app-key" readOnly />
             <label>
               External app key
-              <input value={apiKey} type="password" autoComplete="current-password" onChange={(event) => setApiKey(event.target.value)} />
+              <input
+                value={apiKey}
+                type="password"
+                autoComplete="current-password"
+                onChange={(event) => {
+                  setApiKey(event.target.value);
+                  setConnectionStatus(event.target.value ? "loaded" : "missing");
+                  setSetupError("");
+                  setDiagnostic(null);
+                }}
+              />
             </label>
             <label className="checkbox-row">
               <input
@@ -528,12 +583,13 @@ export function App() {
               />
               <span>
                 Remember key on this device
-                <small>Stored in this browser profile until Electron keychain support is added.</small>
+                <small>Stored in the macOS keychain in Electron and in this browser profile during web development.</small>
               </span>
             </label>
             <button className="primary" type="submit" disabled={isChecking}>
               {isChecking ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />} Test connection
             </button>
+            <div className={`connection-status connection-${connectionStatus}`}>{connectionStatusLabel(connectionStatus)}</div>
             {setupError ? <div className="error-box">{setupError}</div> : null}
             <CheckRow label="Discovery" passed={Boolean(discovery)} />
             <CheckRow label="Authenticated session" passed={Boolean(session)} />
@@ -541,7 +597,6 @@ export function App() {
             <CheckRow label="Route resolved" passed={diagnostic?.checks.routeResolved} />
             <CheckRow label="Chat diagnostic" passed={diagnostic?.checks.chat} />
             <CheckRow label="Streaming" passed={diagnostic?.checks.streaming} />
-            <CheckRow label="Project context" passed={session ? canUseProjectContext : undefined} />
 
             <div className="route-box">
               <span>Route</span>
@@ -552,17 +607,11 @@ export function App() {
             <button className="secondary" onClick={downloadArchive}>
               <Download size={16} /> Export local archive
             </button>
-          </>
-        )}
-      </form>
+        </form>
+      </section>
+      )}
     </main>
   );
-}
-
-function formatProjectContextSummary(path: { path: string; characters?: number } | undefined): string {
-  if (!path) return "Project context summary is available.";
-  if (typeof path.characters !== "number") return `Project context from ${path.path}.`;
-  return `Project context from ${path.path}: ${path.characters} characters selected.`;
 }
 
 function CheckRow({ label, passed }: { label: string; passed?: boolean | null }) {
@@ -580,14 +629,34 @@ function upsertConversation(items: Conversation[], conversation: Conversation): 
   return next.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-function withAssistantMessage(conversation: Conversation, content: string): Conversation {
+function withAssistantMessage(conversation: Conversation, message: ChatMessage): Conversation {
   const withoutStreamingAssistant =
     conversation.messages[conversation.messages.length - 1]?.role === "assistant"
       ? conversation.messages.slice(0, -1)
       : conversation.messages;
   return {
     ...conversation,
-    messages: [...withoutStreamingAssistant, { role: "assistant", content }],
+    messages: [...withoutStreamingAssistant, message],
     updatedAt: new Date().toISOString(),
+  };
+}
+
+function mergeTelemetry(current: ChatTelemetry | undefined, next: ChatTelemetry | undefined): ChatTelemetry | undefined {
+  if (!current && !next) return undefined;
+  return { ...(current || {}), ...(next || {}) };
+}
+
+function finalizeAssistantMessage(message: ChatMessage): ChatMessage {
+  const nowMs = performance.now();
+  const start = message.startedAtMs || nowMs;
+  const totalMs = nowMs - start;
+  const ttftMs = message.firstTokenAtMs ? message.firstTokenAtMs - start : message.content ? totalMs : undefined;
+  const telemetry = mergeTelemetry(message.telemetry, {
+    ...(ttftMs != null ? { ttftMs } : {}),
+    totalMs,
+  });
+  return {
+    ...message,
+    telemetry,
   };
 }

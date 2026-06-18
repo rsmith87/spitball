@@ -11,6 +11,6 @@ describe("parseSseContent", () => {
       "data: [DONE]",
     ].join("\n");
 
-    expect(parseSseContent(chunk)).toEqual(["hel", "lo"]);
+    expect(parseSseContent(chunk)).toEqual([{ content: "hel" }, { content: "lo" }]);
   });
 });

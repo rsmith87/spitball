@@ -1,4 +1,4 @@
-export function buildWindowOptions() {
+export function buildWindowOptions(preloadPath) {
   return {
     width: 1280,
     height: 900,
@@ -9,6 +9,7 @@ export function buildWindowOptions() {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      preload: preloadPath,
       partition: "spitball-desktop-dev",
       sandbox: true,
     },

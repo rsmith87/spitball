@@ -45,7 +45,7 @@ describe("project context client", () => {
           artifacts: [],
           focused_path: "packages/spitball/README.md",
         }),
-        headers: expect.objectContaining({ "X-Llama-Manager-Key": "key" }),
+        headers: expect.objectContaining({ "X-Llama-Pack-Key": "key" }),
       }),
     );
   });

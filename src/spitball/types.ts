@@ -134,7 +134,20 @@ export type ContextBudget = {
   warnings: string[];
 };
 
+export type ChatTelemetry = {
+  promptTokens?: number;
+  completionTokens?: number;
+  promptMs?: number;
+  completionMs?: number;
+  tokensPerSecond?: number;
+  ttftMs?: number;
+  totalMs?: number;
+};
+
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
+  startedAtMs?: number;
+  firstTokenAtMs?: number;
+  telemetry?: ChatTelemetry;
 };

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getContextBudget, sendChat } from "./chat";
+import { getContextBudget, sendChat, streamChat } from "./chat";
 
 describe("sendChat", () => {
   afterEach(() => {
@@ -40,7 +40,7 @@ describe("sendChat", () => {
       vi.fn(async (url: string, init?: RequestInit) => {
         expect(url).toBe("http://controller.local/lm-api/v1/chat/qwen/context-budget");
         expect(init?.method).toBe("POST");
-        expect(init?.headers).toMatchObject({ "X-Llama-Manager-Key": "key" });
+        expect(init?.headers).toMatchObject({ "X-Llama-Pack-Key": "key" });
         expect(JSON.parse(String(init?.body))).toMatchObject({
           messages: [{ role: "user", content: "hello" }],
           request_type: "chat",
@@ -78,5 +78,131 @@ describe("sendChat", () => {
     );
 
     expect(budget.remaining_context_tokens).toBe(32156);
+  });
+
+  it("returns assistant content with non-streaming telemetry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "assistant ok" } }],
+            usage: { prompt_tokens: 21, completion_tokens: 7 },
+            timings: { prompt_ms: 35, predicted_ms: 700, predicted_n: 7 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    const result = await sendChat(
+      "http://controller.local",
+      { mode: "external_api_key", apiKey: "key" },
+      {
+        model: "qwen",
+        messages: [{ role: "user", content: "hello" }],
+        stream: false,
+      },
+    );
+
+    expect(result).toEqual({
+      content: "assistant ok",
+      telemetry: {
+        promptTokens: 21,
+        completionTokens: 7,
+        promptMs: 35,
+        completionMs: 700,
+        tokensPerSecond: 10,
+      },
+    });
+  });
+
+  it("passes streaming telemetry chunks with content deltas", async () => {
+    const encoder = new TextEncoder();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'));
+              controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":" there"}}],"usage":{"prompt_tokens":8,"completion_tokens":2},"timings":{"predicted_ms":250,"predicted_n":2}}\n\n'));
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        );
+      }),
+    );
+    const deltas: Array<{ content: string; telemetry?: { tokensPerSecond?: number } }> = [];
+
+    await streamChat(
+      "http://controller.local",
+      { mode: "external_api_key", apiKey: "key" },
+      {
+        model: "qwen",
+        messages: [{ role: "user", content: "hello" }],
+        stream: true,
+      },
+      (delta) => deltas.push(delta),
+    );
+
+    expect(deltas).toEqual([
+      { content: "hi" },
+      {
+        content: " there",
+        telemetry: {
+          promptTokens: 8,
+          completionTokens: 2,
+          completionMs: 250,
+          tokensPerSecond: 8,
+        },
+      },
+    ]);
+  });
+
+  it("passes final streaming telemetry chunks without content", async () => {
+    const encoder = new TextEncoder();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"done"}}]}\n\n'));
+              controller.enqueue(encoder.encode('data: {"choices":[],"usage":{"prompt_tokens":13,"completion_tokens":4},"timings":{"predicted_ms":1000,"predicted_n":4}}\n\n'));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        );
+      }),
+    );
+    const deltas: Array<{ content: string; telemetry?: { tokensPerSecond?: number } }> = [];
+
+    await streamChat(
+      "http://controller.local",
+      { mode: "external_api_key", apiKey: "key" },
+      {
+        model: "qwen",
+        messages: [{ role: "user", content: "hello" }],
+        stream: true,
+      },
+      (delta) => deltas.push(delta),
+    );
+
+    expect(deltas).toEqual([
+      { content: "done" },
+      {
+        content: "",
+        telemetry: {
+          promptTokens: 13,
+          completionTokens: 4,
+          completionMs: 1000,
+          tokensPerSecond: 4,
+        },
+      },
+    ]);
   });
 });
