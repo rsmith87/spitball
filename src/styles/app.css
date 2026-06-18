@@ -331,14 +331,48 @@ select:focus, input:focus, textarea:focus { border-color: var(--color-accent); b
   border: 1px solid var(--color-border);
   border-radius: 8px;
   display: grid;
-  gap: 4px;
+  gap: 7px;
   padding: 9px 11px;
 }
+.context-budget-header {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: space-between;
+}
 .context-budget strong { font-size: 13px; }
+.context-budget-header span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.context-budget-meter {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-bg-secondary);
+}
+.context-budget-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transition: width 160ms ease;
+}
+.context-budget-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
 .context-budget small { color: var(--color-text-muted); font-size: 12px; }
 .context-budget-near_limit { border-color: var(--color-context-warning); color: var(--color-context-warning); }
 .context-budget-too_large, .context-budget.error { border-color: var(--color-context-danger); color: var(--color-context-danger); }
 .context-budget-getting_full { border-color: var(--color-context-warning); }
+.context-budget-getting_full .context-budget-meter span,
+.context-budget-near_limit .context-budget-meter span { background: var(--color-context-warning); }
+.context-budget-too_large .context-budget-meter span { background: var(--color-context-danger); }
 .context-warning { font-weight: 800; }
 .composer textarea { min-height: 58px; max-height: 160px; resize: none; overflow-y: auto; }
 .composer button { height: 46px; border: 0; border-radius: 8px; background: var(--color-bg-brand-mark); color: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-weight: 800; }

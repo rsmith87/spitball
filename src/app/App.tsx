@@ -31,6 +31,10 @@ function contextBudgetSummary(budget: ContextBudget): string {
   return `Context: ${formatCompactTokenCount(used)} / ${formatCompactTokenCount(budget.context_window_tokens)} used · ${formatCompactTokenCount(budget.remaining_context_tokens)} left`;
 }
 
+function contextBudgetPercent(budget: ContextBudget): number {
+  return Math.min(100, Math.max(0, Math.round(budget.usage_ratio * 100)));
+}
+
 function contextBudgetWarning(budget: ContextBudget): string {
   if (budget.status === "too_large") return "Too large to send. Remove context or reduce expected output.";
   if (budget.status === "near_limit") return "Near limit. Shorten older messages or start a new conversation.";
@@ -530,7 +534,24 @@ export function App() {
         <footer className="composer">
           {contextBudget ? (
             <div className={`context-budget context-budget-${contextBudget.status}`} data-testid="spitball-context-budget">
-              <strong>{contextBudgetSummary(contextBudget)}</strong>
+              <div className="context-budget-header">
+                <strong>{contextBudgetSummary(contextBudget)}</strong>
+                <span>{contextBudgetPercent(contextBudget)}%</span>
+              </div>
+              <div
+                className="context-budget-meter"
+                role="progressbar"
+                aria-label="Context used"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={contextBudgetPercent(contextBudget)}
+              >
+                <span style={{ width: `${contextBudgetPercent(contextBudget)}%` }} />
+              </div>
+              <div className="context-budget-breakdown">
+                <span>Prompt {formatCompactTokenCount(contextBudget.prompt_tokens_estimated)}</span>
+                <span>Reserved output {formatCompactTokenCount(contextBudget.reserved_completion_tokens)}</span>
+              </div>
               <small>{contextBudget.precision === "approximate" ? "Approximate estimate" : "Tokenizer estimate"}</small>
               {contextBudgetWarning(contextBudget) ? <small className="context-warning">{contextBudgetWarning(contextBudget)}</small> : null}
             </div>

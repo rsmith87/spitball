@@ -265,6 +265,10 @@ describe("App setup profile", () => {
 
     await waitFor(() => expect(screen.getByTestId("spitball-context-budget").textContent).toContain("Context: 14.5k / 32.8k used"));
     expect(screen.getByTestId("spitball-context-budget").textContent).toContain("18.3k left");
+    expect(screen.getByTestId("spitball-context-budget").textContent).toContain("44%");
+    expect(screen.getByTestId("spitball-context-budget").textContent).toContain("Prompt 14.0k");
+    expect(screen.getByTestId("spitball-context-budget").textContent).toContain("Reserved output 512");
+    expect(screen.getByRole("progressbar", { name: "Context used" }).getAttribute("aria-valuenow")).toBe("44");
     expect(getContextBudget).toHaveBeenCalled();
   });
 
