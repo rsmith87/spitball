@@ -30,6 +30,12 @@ function contextBudgetSummary(budget: ContextBudget): string {
   return `Context: ${formatCompactTokenCount(used)} / ${formatCompactTokenCount(budget.context_window_tokens)} used · ${formatCompactTokenCount(budget.remaining_context_tokens)} left`;
 }
 
+function contextBudgetWarning(budget: ContextBudget): string {
+  if (budget.status === "too_large") return "Too large to send. Remove context or reduce expected output.";
+  if (budget.status === "near_limit") return "Near limit. Shorten older messages or start a new conversation.";
+  return "";
+}
+
 export function App() {
   const [backendUrl, setBackendUrl] = useState("http://mac-mini.local");
   const [apiKey, setApiKey] = useState("");
@@ -78,6 +84,7 @@ export function App() {
   const model = models.find((item) => item.id === selectedModel);
   const availableRequestTypes = model?.metadata.request_types || [];
   const canUseProjectContext = Boolean(session?.capabilities.projectContext && session.projectContext?.actions.includes("summarize_path"));
+  const contextPressureClass = contextBudget ? `context-pressure-${contextBudget.status}` : "context-pressure-empty";
 
   useEffect(() => {
     void listConversations().then((items) => {
@@ -335,7 +342,7 @@ export function App() {
         </div>
       </aside>
 
-      <section className="chat-panel">
+      <section className={`chat-panel ${contextPressureClass}`}>
         <header className="chat-header">
           <div>
             <h2>{activeConversation?.title || "New private chat"}</h2>
@@ -383,6 +390,7 @@ export function App() {
             <div className={`context-budget context-budget-${contextBudget.status}`} data-testid="spitball-context-budget">
               <strong>{contextBudgetSummary(contextBudget)}</strong>
               <small>{contextBudget.precision === "approximate" ? "Approximate estimate" : "Tokenizer estimate"}</small>
+              {contextBudgetWarning(contextBudget) ? <small className="context-warning">{contextBudgetWarning(contextBudget)}</small> : null}
             </div>
           ) : contextBudgetError ? (
             <div className="context-budget error" data-testid="spitball-context-budget">{contextBudgetError}</div>

@@ -202,6 +202,34 @@ describe("App setup profile", () => {
     expect(getContextBudget).toHaveBeenCalled();
   });
 
+  it("shows context pressure styling and warning near the limit", async () => {
+    vi.mocked(getContextBudget).mockResolvedValueOnce({
+      model: "gemma-4-E4B-it",
+      context_window_tokens: 32768,
+      prompt_tokens_estimated: 28500,
+      reserved_completion_tokens: 1024,
+      available_input_tokens: 31744,
+      remaining_context_tokens: 3244,
+      usage_ratio: 0.901,
+      status: "near_limit",
+      estimation_method: "approx_chars_div_4",
+      precision: "approximate",
+      warnings: [],
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+    await waitFor(() => expect(saveProfile).toHaveBeenCalled());
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "large context");
+
+    const budget = await screen.findByTestId("spitball-context-budget");
+    expect(budget.textContent).toContain("Near limit. Shorten older messages or start a new conversation.");
+    expect(budget.closest(".chat-panel")?.className).toContain("context-pressure-near_limit");
+  });
+
   it("sends agent tool runtime when agent tools are enabled", async () => {
     const user = userEvent.setup();
     render(<App />);
