@@ -19,12 +19,24 @@ const savedProfile = {
 };
 
 const saveProfile = vi.fn();
+const saveProject = vi.fn();
+const storedProjects = [
+  {
+    id: "project-llama-pack",
+    name: "Llama Pack",
+    root: "/Users/robertsmith/Apps/llama-pack",
+    createdAt: "2026-06-18T10:00:00.000Z",
+    updatedAt: "2026-06-18T10:00:00.000Z",
+  },
+];
 
 vi.mock("../storage/indexedDbStorage", () => ({
   getProfile: vi.fn(async () => savedProfile),
   listConversations: vi.fn(async () => []),
+  listProjects: vi.fn(async () => storedProjects),
   saveConversation: vi.fn(async () => "chat-1"),
   saveProfile: (...args: unknown[]) => saveProfile(...args),
+  saveProject: (...args: unknown[]) => saveProject(...args),
 }));
 
 vi.mock("../spitball/discovery", () => ({
@@ -130,6 +142,7 @@ describe("App setup profile", () => {
 
   beforeEach(() => {
     saveProfile.mockClear();
+    saveProject.mockClear();
     vi.mocked(sendChat).mockClear();
     vi.mocked(streamChat).mockClear();
     vi.mocked(getContextBudget).mockClear();
@@ -303,5 +316,30 @@ describe("App setup profile", () => {
 
     expect(sidebar?.textContent).toContain("Project context");
     expect(sidebar?.textContent?.indexOf("Project context")).toBeLessThan(sidebar?.textContent?.indexOf("Browser history uses IndexedDB") ?? -1);
+  });
+
+  it("restores stored projects and shows safe-dir guidance", async () => {
+    render(<App />);
+
+    expect(await screen.findByText("Llama Pack")).not.toBeNull();
+    expect(screen.getByText("/Users/robertsmith/Apps/llama-pack")).not.toBeNull();
+    expect(screen.getByText(/Backend tools can use this project only after its root is allowed in Llama Pack safe dirs/i)).not.toBeNull();
+  });
+
+  it("adds a local project and selects it", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("Project name"), "Website");
+    await user.type(screen.getByLabelText("Project root"), "/Users/robertsmith/Apps/website");
+    await user.click(screen.getByRole("button", { name: /add project/i }));
+
+    await waitFor(() => expect(saveProject).toHaveBeenCalled());
+    expect(saveProject.mock.calls[0][0]).toMatchObject({
+      name: "Website",
+      root: "/Users/robertsmith/Apps/website",
+    });
+    expect(await screen.findByText("Website")).not.toBeNull();
+    expect(screen.getByText("Selected project: Website")).not.toBeNull();
   });
 });

@@ -11,7 +11,42 @@ npm install
 npm run dev
 ```
 
-Vite will print the local URL, usually `http://127.0.0.1:5173/` or the next available port.
+Vite runs at `http://127.0.0.1:5174/`.
+
+## Run The Desktop Development Shell
+
+The standalone Electron shell lives in `desktop/` and attaches to an
+already-running Spitball Vite app. It does not start or stop Vite and does not
+start a Llama Pack backend.
+
+Start Spitball first:
+
+```bash
+npm run dev
+```
+
+Then launch Electron in another terminal:
+
+```bash
+cd desktop
+npm ci
+npm run dev
+```
+
+By default, Electron loads:
+
+```text
+http://127.0.0.1:5174/
+```
+
+Override the target URL if you intentionally run Vite on a different port:
+
+```bash
+SPITBALL_DESKTOP_URL=http://127.0.0.1:5175/ npm run dev
+```
+
+If the target URL is unavailable, the shell shows a local error page with the
+command needed to start the Vite app.
 
 ## Connect To Llama Pack
 
@@ -33,8 +68,8 @@ Use an external app key created in Llama Pack core. For browser development, the
 
 ```yaml
 client_cors_origins:
-  - "http://localhost:5173"
-  - "http://127.0.0.1:5173"
+  - "http://localhost:5174"
+  - "http://127.0.0.1:5174"
 ```
 
 Match the actual port printed by Vite.

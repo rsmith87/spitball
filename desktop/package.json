@@ -1,0 +1,14 @@
+{
+  "name": "spitball-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/main.mjs",
+  "scripts": {
+    "dev": "electron .",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "electron": "^39.2.7"
+  }
+}

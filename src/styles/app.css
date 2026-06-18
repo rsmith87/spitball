@@ -199,14 +199,22 @@ button:disabled { cursor: not-allowed; opacity: 0.62; }
 
 .rail-section { min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 10px; }
 .section-title { color: var(--color-section-title); font-size: 11px; text-transform: uppercase; font-weight: 800; letter-spacing: 0; }
-.conversation-list { display: flex; flex-direction: column; gap: 7px; overflow: auto; }
-.conversation-row {
+.conversation-list,
+.project-list { display: flex; flex-direction: column; gap: 7px; overflow: auto; }
+.conversation-row,
+.project-row {
   text-align: left; border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 10px;
   display: grid; gap: 4px; color: var(--color-conversation-text);
 }
-.conversation-row.active, .conversation-row:hover { background: var(--color-bg-row-hover); border-color: var(--color-border-row); }
-.conversation-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 700; font-size: 13px; }
-.conversation-row small, .empty { color: var(--color-empty-text); font-size: 12px; }
+.conversation-row.active,
+.conversation-row:hover,
+.project-row.active,
+.project-row:hover { background: var(--color-bg-row-hover); border-color: var(--color-border-row); }
+.conversation-row span,
+.project-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 700; font-size: 13px; }
+.conversation-row small,
+.project-row small,
+.empty { color: var(--color-empty-text); font-size: 12px; }
 .storage-note { display: flex; gap: 10px; color: var(--color-text-dim); font-size: 12px; line-height: 1.45; border-top: 1px solid var(--color-border-storage-top); padding-top: 16px; }
 
 .chat-panel {
@@ -302,10 +310,19 @@ select:focus, input:focus, textarea:focus { border-color: var(--color-accent); b
 .route-box span, .route-box small { color: var(--color-route-span); font-size: 12px; }
 .route-box strong { color: var(--color-route-strong); font-size: 14px; }
 .context-box { display: grid; gap: 12px; border-top: 1px solid var(--color-border-check-row); padding-top: 14px; }
+.project-box { gap: 10px; }
 .context-heading { display: flex; align-items: center; gap: 8px; color: var(--color-label-text); font-size: 12px; font-weight: 800; }
 .context-box label { display: grid; gap: 7px; color: var(--color-label-text); font-weight: 800; font-size: 12px; }
 .context-box textarea { min-height: 96px; }
 .context-box .secondary { width: 100%; }
+.safe-dir-note {
+  border: 1px solid var(--color-border-route);
+  border-radius: 8px;
+  color: var(--color-text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 10px;
+}
 .context-summary {
   border: 1px solid var(--color-border-route);
   border-radius: 8px;

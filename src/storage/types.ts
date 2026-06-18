@@ -19,3 +19,11 @@ export type Conversation = {
   messages: ChatMessage[];
   updatedAt: string;
 };
+
+export type Project = {
+  id: string;
+  name: string;
+  root: string;
+  createdAt: string;
+  updatedAt: string;
+};

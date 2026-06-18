@@ -1,4 +1,4 @@
-import { CheckCircle2, Database, Download, FileText, KeyRound, Loader2, MessageSquare, Moon, PanelRightClose, PanelRightOpen, PlugZap, Send, ShieldCheck, Sun, XCircle } from "lucide-react";
+import { CheckCircle2, Database, Download, FileText, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, PanelRightClose, PanelRightOpen, PlugZap, Send, ShieldCheck, Sun, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { getClientDiscovery } from "../spitball/discovery";
@@ -9,8 +9,8 @@ import { getContextBudget, sendChat, streamChat } from "../spitball/chat";
 import { summarizePath } from "../spitball/projectContext";
 import type { AuthState, ChatDiagnostic, ChatMessage, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
-import { getProfile, listConversations, saveConversation, saveProfile } from "../storage/indexedDbStorage";
-import type { ConnectionProfile, Conversation } from "../storage/types";
+import { getProfile, listConversations, listProjects, saveConversation, saveProfile, saveProject } from "../storage/indexedDbStorage";
+import type { ConnectionProfile, Conversation, Project } from "../storage/types";
 import spitballLogo from "../styles/spitball-logo.png";
 
 const DEFAULT_MESSAGE = "Ask a private model about the current project.";
@@ -57,6 +57,10 @@ export function App() {
   const [contextBudgetError, setContextBudgetError] = useState("");
   const [isChecking, setIsChecking] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [projectRoot, setProjectRoot] = useState("");
   const [activeId, setActiveId] = useState("");
   const [draft, setDraft] = useState(DEFAULT_MESSAGE);
   const [isSending, setIsSending] = useState(false);
@@ -81,6 +85,7 @@ export function App() {
 
   const auth = useMemo<AuthState | null>(() => (apiKey ? { mode: "external_api_key", apiKey } : null), [apiKey]);
   const activeConversation = conversations.find((item) => item.id === activeId) || conversations[0];
+  const selectedProject = projects.find((item) => item.id === selectedProjectId) || projects[0] || null;
   const model = models.find((item) => item.id === selectedModel);
   const availableRequestTypes = model?.metadata.request_types || [];
   const canUseProjectContext = Boolean(session?.capabilities.projectContext && session.projectContext?.actions.includes("summarize_path"));
@@ -90,6 +95,10 @@ export function App() {
     void listConversations().then((items) => {
       setConversations(items);
       if (items[0]) setActiveId(items[0].id);
+    });
+    void listProjects().then((items) => {
+      setProjects(items);
+      if (items[0]) setSelectedProjectId(items[0].id);
     });
     void getProfile("default").then((profile) => {
       if (!profile) return;
@@ -176,6 +185,25 @@ export function App() {
     } finally {
       setIsChecking(false);
     }
+  }
+
+  async function addProject() {
+    const name = projectName.trim();
+    const root = projectRoot.trim();
+    if (!name || !root) return;
+    const now = new Date().toISOString();
+    const project: Project = {
+      id: newId("project"),
+      name,
+      root,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await saveProject(project);
+    setProjects((items) => [project, ...items.filter((item) => item.id !== project.id)]);
+    setSelectedProjectId(project.id);
+    setProjectName("");
+    setProjectRoot("");
   }
 
   async function sendMessage() {
@@ -301,6 +329,46 @@ export function App() {
         </section>
 
         <div className="sidebar-footer">
+          <section className="context-box project-box">
+            <div className="context-heading">
+              <FolderOpen size={16} />
+              <span>Projects</span>
+            </div>
+            <label>
+              Project name
+              <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Llama Pack" />
+            </label>
+            <label>
+              Project root
+              <input value={projectRoot} onChange={(event) => setProjectRoot(event.target.value)} placeholder="/Users/robertsmith/Apps/llama-pack" />
+            </label>
+            <button
+              className="secondary"
+              type="button"
+              disabled={!projectName.trim() || !projectRoot.trim()}
+              onClick={() => void addProject()}
+            >
+              <FolderOpen size={16} /> Add project
+            </button>
+            <div className="project-list">
+              {projects.length === 0 ? <p className="empty">No projects saved yet.</p> : null}
+              {projects.map((project) => (
+                <button
+                  className={`project-row ${project.id === selectedProject?.id ? "active" : ""}`}
+                  key={project.id}
+                  type="button"
+                  onClick={() => setSelectedProjectId(project.id)}
+                >
+                  <span>{project.name}</span>
+                  <small>{project.root}</small>
+                </button>
+              ))}
+            </div>
+            {selectedProject ? <div className="context-summary">Selected project: {selectedProject.name}</div> : null}
+            <div className="safe-dir-note">
+              Backend tools can use this project only after its root is allowed in Llama Pack safe dirs.
+            </div>
+          </section>
           <section className="context-box">
             <div className="context-heading">
               <FileText size={16} />

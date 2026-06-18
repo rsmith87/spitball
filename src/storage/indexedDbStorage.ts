@@ -1,7 +1,7 @@
-import type { ConnectionProfile, Conversation } from "./types";
+import type { ConnectionProfile, Conversation, Project } from "./types";
 
 const DB_NAME = "spitball";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -10,6 +10,7 @@ function openDb(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains("profiles")) db.createObjectStore("profiles", { keyPath: "id" });
       if (!db.objectStoreNames.contains("conversations")) db.createObjectStore("conversations", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("projects")) db.createObjectStore("projects", { keyPath: "id" });
     };
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
@@ -41,6 +42,16 @@ export function saveConversation(conversation: Conversation): Promise<IDBValidKe
 
 export function listConversations(): Promise<Conversation[]> {
   return tx("conversations", "readonly", (store) => store.getAll()).then((items) =>
+    items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+  );
+}
+
+export function saveProject(project: Project): Promise<IDBValidKey> {
+  return tx("projects", "readwrite", (store) => store.put(project));
+}
+
+export function listProjects(): Promise<Project[]> {
+  return tx("projects", "readonly", (store) => store.getAll()).then((items) =>
     items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
   );
 }
