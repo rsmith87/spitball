@@ -1,9 +1,10 @@
-import type { ChatTelemetry } from "./types";
+import type { ChatProgressEvent, ChatTelemetry } from "./types";
 
 export type ChatStreamDelta = {
   content: string;
   threadId?: string;
   telemetry?: ChatTelemetry;
+  progress?: ChatProgressEvent;
 };
 
 export function parseSseContent(chunk: string): ChatStreamDelta[] {
@@ -16,6 +17,16 @@ export function parseSseContent(chunk: string): ChatStreamDelta[] {
       const payload = JSON.parse(data);
       if (payload.type === "thread" && typeof payload.thread_id === "string") {
         values.push({ content: "", threadId: payload.thread_id });
+        continue;
+      }
+      const progress = progressFromPayload(payload);
+      if (progress) {
+        values.push({ content: "", progress });
+        continue;
+      }
+      if (payload.type === "final") {
+        const content = payload.choices?.[0]?.message?.content;
+        values.push({ content: typeof content === "string" ? content : "" });
         continue;
       }
       const telemetry = telemetryFromPayload(payload);
@@ -33,6 +44,48 @@ export function parseSseContent(chunk: string): ChatStreamDelta[] {
     }
   }
   return values;
+}
+
+function progressFromPayload(payload: Record<string, unknown>): ChatProgressEvent | undefined {
+  if (payload.type !== "trace_event") return undefined;
+  const eventType = typeof payload.event_type === "string" ? payload.event_type : "";
+  const payloadBody = isRecord(payload.payload) ? payload.payload : {};
+  if (eventType === "assistant_turn_started") return { id: "assistant-generating", type: "status", status: "running", label: "Generating" };
+  if (eventType === "answer_verification_started" || eventType === "answer_verification_failed") {
+    return { id: "answer-reviewing", type: "status", status: "running", label: "Reviewing generation" };
+  }
+  if (eventType === "tool_call_started" || eventType === "tool_call_completed" || eventType === "tool_call_failed") {
+    const toolName = typeof payloadBody.tool_name === "string" ? payloadBody.tool_name : "tool";
+    const status = eventType === "tool_call_started" ? "running" : eventType === "tool_call_failed" || payload.status === "failed" ? "failed" : "passed";
+    const target = toolTarget(payloadBody);
+    return {
+      id: toolProgressId(payload, toolName, target.target),
+      type: "tool",
+      status,
+      label: toolName,
+      toolName,
+      ...target,
+    };
+  }
+  return undefined;
+}
+
+function toolProgressId(payload: Record<string, unknown>, toolName: string, target: string | undefined): string {
+  const toolCallId = typeof payload.tool_call_id === "string" ? payload.tool_call_id : "";
+  if (toolCallId) return `tool-${toolCallId}`;
+  return `tool-${toolName}-${target || "call"}`;
+}
+
+function toolTarget(payload: Record<string, unknown>): { target?: string } {
+  const args = isRecord(payload.arguments) ? payload.arguments : {};
+  const rawPath = typeof args.path === "string" ? args.path : typeof args.file === "string" ? args.file : "";
+  if (!rawPath) return {};
+  const segments = rawPath.split(/[\\/]/).filter(Boolean);
+  return { target: segments[segments.length - 1] || rawPath };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export function telemetryFromPayload(payload: unknown): ChatTelemetry | undefined {

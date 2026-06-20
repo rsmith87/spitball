@@ -144,6 +144,15 @@ export type ChatTelemetry = {
   totalMs?: number;
 };
 
+export type ChatProgressEvent = {
+  id: string;
+  type: "status" | "tool";
+  status: "running" | "passed" | "failed";
+  label: string;
+  toolName?: string;
+  target?: string;
+};
+
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -151,4 +160,5 @@ export type ChatMessage = {
   startedAtMs?: number;
   firstTokenAtMs?: number;
   telemetry?: ChatTelemetry;
+  progressEvents?: ChatProgressEvent[];
 };

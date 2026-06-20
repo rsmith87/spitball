@@ -369,6 +369,36 @@ select:focus, input:focus, textarea:focus { border-color: var(--color-accent); b
   text-align: left;
 }
 .message-markdown th { background: var(--color-bg-secondary); }
+.agent-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 8px;
+}
+.agent-progress-pill {
+  align-items: center;
+  border: 1px solid var(--color-border-message);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 5px;
+  line-height: 1;
+  min-height: 26px;
+  max-width: 100%;
+  padding: 5px 8px;
+}
+.agent-progress-pill[data-status="passed"] { color: var(--color-check-pass); }
+.agent-progress-pill[data-status="failed"] { color: var(--color-check-fail); }
+.agent-progress-pill small {
+  color: var(--color-text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .message-pending {
   align-items: center;
   color: var(--color-text-muted);

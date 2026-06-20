@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getContextBudget, sendChat, streamChat } from "./chat";
+import { parseSseContent } from "./streaming";
 
 describe("sendChat", () => {
   afterEach(() => {
@@ -243,6 +244,46 @@ describe("sendChat", () => {
           tokensPerSecond: 4,
         },
       },
+    ]);
+  });
+
+  it("parses agent tool progress events and final content", () => {
+    const deltas = parseSseContent(
+      [
+        'data: {"type":"trace_event","id":"evt-1","event_type":"assistant_turn_started","status":"running","title":"Assistant turn 1","payload":{"iteration":1}}',
+        'data: {"type":"trace_event","id":"evt-2","tool_call_id":"call-1","event_type":"tool_call_started","status":"running","title":"read_project_file started","payload":{"tool_name":"read_project_file","arguments":{"path":"llama_pack/core/benchmarks/runner.py"}}}',
+        'data: {"type":"trace_event","id":"evt-3","tool_call_id":"call-1","event_type":"tool_call_completed","status":"passed","title":"read_project_file completed","payload":{"tool_name":"read_project_file","arguments":{"path":"llama_pack/core/benchmarks/runner.py"}}}',
+        'data: {"type":"trace_event","id":"evt-4","event_type":"answer_verification_failed","status":"failed","title":"Answer verification failed","payload":{"missing_paths":["src/fake.py"]}}',
+        'data: {"type":"final","choices":[{"message":{"role":"assistant","content":"final answer"}}]}',
+      ].join("\n\n"),
+    );
+
+    expect(deltas).toEqual([
+      { content: "", progress: { id: "assistant-generating", label: "Generating", status: "running", type: "status" } },
+      {
+        content: "",
+        progress: {
+          id: "tool-call-1",
+          label: "read_project_file",
+          status: "running",
+          target: "runner.py",
+          toolName: "read_project_file",
+          type: "tool",
+        },
+      },
+      {
+        content: "",
+        progress: {
+          id: "tool-call-1",
+          label: "read_project_file",
+          status: "passed",
+          target: "runner.py",
+          toolName: "read_project_file",
+          type: "tool",
+        },
+      },
+      { content: "", progress: { id: "answer-reviewing", label: "Reviewing generation", status: "running", type: "status" } },
+      { content: "final answer" },
     ]);
   });
 });

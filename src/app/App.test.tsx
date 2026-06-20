@@ -367,15 +367,17 @@ describe("App setup profile", () => {
   });
 
   it("shows analytics chips for assistant responses", async () => {
-    vi.mocked(sendChat).mockResolvedValueOnce({
-      content: "assistant measured",
-      telemetry: {
-        promptTokens: 42,
-        completionTokens: 10,
-        promptMs: 55,
-        completionMs: 500,
-        tokensPerSecond: 20,
-      },
+    vi.mocked(streamChat).mockImplementationOnce(async (_baseUrl, _auth, _request, onToken) => {
+      onToken({
+        content: "assistant measured",
+        telemetry: {
+          promptTokens: 42,
+          completionTokens: 10,
+          promptMs: 55,
+          completionMs: 500,
+          tokensPerSecond: 20,
+        },
+      });
     });
     const user = userEvent.setup();
     render(<App />);
@@ -458,11 +460,11 @@ describe("App setup profile", () => {
     await user.type(composer, "check workspace");
     await user.keyboard("{Enter}");
 
-    await waitFor(() => expect(sendChat).toHaveBeenCalled());
-    expect(vi.mocked(sendChat).mock.calls[0][2]).toMatchObject({ tool_runtime: "agent" });
+    await waitFor(() => expect(streamChat).toHaveBeenCalled());
+    expect(vi.mocked(streamChat).mock.calls[0][2]).toMatchObject({ tool_runtime: "agent" });
   });
 
-  it("uses non-streaming chat when agent tools are enabled", async () => {
+  it("streams chat when agent tools are enabled", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -476,14 +478,59 @@ describe("App setup profile", () => {
     await user.type(composer, "use a tool");
     await user.keyboard("{Enter}");
 
-    await waitFor(() => expect(sendChat).toHaveBeenCalled());
-    expect(streamChat).not.toHaveBeenCalled();
-    expect(vi.mocked(sendChat).mock.calls[0][2]).toMatchObject({
-      stream: false,
+    await waitFor(() => expect(streamChat).toHaveBeenCalled());
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(vi.mocked(streamChat).mock.calls[0][2]).toMatchObject({
+      stream: true,
       tool_runtime: "agent",
       max_tokens: 1024,
       agent_tool_max_iterations: 12,
     });
+  });
+
+  it("renders streamed agent tool progress pills", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(async (_baseUrl, _auth, _request, onToken) => {
+      onToken({ content: "", progress: { id: "evt-1", type: "status", status: "running", label: "Generating" } });
+      onToken({
+        content: "",
+        progress: {
+          id: "evt-2",
+          type: "tool",
+          status: "running",
+          label: "read_project_file",
+          toolName: "read_project_file",
+          target: "runner.py",
+        },
+      });
+      onToken({
+        content: "",
+        progress: {
+          id: "evt-2",
+          type: "tool",
+          status: "passed",
+          label: "read_project_file",
+          toolName: "read_project_file",
+          target: "runner.py",
+        },
+      });
+      onToken({ content: "", progress: { id: "evt-3", type: "status", status: "running", label: "Reviewing generation" } });
+      onToken({ content: "assistant verified" });
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText("Agent tools"));
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "verify this");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("assistant verified")).not.toBeNull());
+    expect(screen.getByText("Generating")).not.toBeNull();
+    expect(screen.getByText("read_project_file")).not.toBeNull();
+    expect(screen.getByText("runner.py")).not.toBeNull();
+    expect(screen.getByText("Reviewing generation")).not.toBeNull();
+    expect(document.querySelector('.agent-progress-pill[data-status="passed"]')).not.toBeNull();
   });
 
   it("opens setup controls from the Settings sidebar item", async () => {

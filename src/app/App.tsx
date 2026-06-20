@@ -7,9 +7,9 @@ import { getClientDiscovery } from "../spitball/discovery";
 import { getClientSession } from "../spitball/session";
 import { listModels } from "../spitball/models";
 import { runChatDiagnostics } from "../spitball/diagnostics";
-import { getContextBudget, sendChat, streamChat } from "../spitball/chat";
+import { getContextBudget, streamChat } from "../spitball/chat";
 import { createBackendProject, listBackendProjects } from "../spitball/projects";
-import type { AuthState, ChatDiagnostic, ChatMessage, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
+import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
 import { getProfile, listConversations, listProjects, saveConversation, saveProfile, saveProject } from "../storage";
 import type { ConnectionProfile, Conversation, Project } from "../storage/types";
@@ -58,6 +58,21 @@ function MarkdownMessage({ content }: { content: string }) {
   return (
     <div className="message-markdown">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
+  );
+}
+
+function AgentProgress({ events }: { events: ChatProgressEvent[] }) {
+  if (!events.length) return null;
+  return (
+    <div className="agent-progress" aria-label="Agent progress">
+      {events.map((event) => (
+        <span className="agent-progress-pill" data-status={event.status} key={event.id}>
+          {event.status === "running" ? <Loader2 className="spin" size={13} /> : event.status === "failed" ? <XCircle size={13} /> : <CheckCircle2 size={13} />}
+          <span>{event.label}</span>
+          {event.target ? <small>{event.target}</small> : null}
+        </span>
+      ))}
     </div>
   );
 }
@@ -338,72 +353,52 @@ export function App() {
       let threadId = pending.threadId;
       let firstTokenAtMs: number | undefined;
       let streamTelemetry: ChatTelemetry | undefined;
+      let progressEvents: ChatProgressEvent[] = [];
       const toolRuntime = agentToolsEnabled ? "agent" : undefined;
-      if (!agentToolsEnabled) {
-        await streamChat(
-          backendUrl,
-          auth,
-          {
-            model: selectedModel,
-            request_type: requestType,
-            stream: true,
-            max_tokens: maxTokens,
-            agent_tool_max_iterations: agentToolMaxIterations,
-            thread_id: threadId,
-            messages: pending.messages,
-            tool_runtime: toolRuntime,
-          },
-          (delta) => {
-            if (delta.threadId) threadId = delta.threadId;
-            if (!delta.content && !delta.telemetry) {
-              setConversations((items) => upsertConversation(items, { ...waiting, threadId }));
-              return;
-            }
-            assistant += delta.content;
-            if (!firstTokenAtMs && delta.content) firstTokenAtMs = performance.now();
-            streamTelemetry = mergeTelemetry(streamTelemetry, delta.telemetry);
-            const streamingMessage: ChatMessage = {
-              role: "assistant",
-              content: assistant,
-              pending: true,
-              startedAtMs,
-              firstTokenAtMs,
-              telemetry: streamTelemetry,
-            };
-            const streamingConversation = withAssistantMessage({ ...pending, threadId }, streamingMessage);
-            setConversations((items) => upsertConversation(items, streamingConversation));
-          },
-        );
-      } else {
-        const result = await sendChat(backendUrl, auth, {
+      await streamChat(
+        backendUrl,
+        auth,
+        {
           model: selectedModel,
           request_type: requestType,
-          stream: false,
+          stream: true,
           max_tokens: maxTokens,
           agent_tool_max_iterations: agentToolMaxIterations,
           thread_id: threadId,
           messages: pending.messages,
           tool_runtime: toolRuntime,
-        });
-        assistant = result.content;
-        threadId = result.threadId || threadId;
-        const saved = withAssistantMessage({ ...pending, threadId }, finalizeAssistantMessage({
-          role: "assistant",
-          content: assistant || "(empty response)",
-          startedAtMs,
-          telemetry: result.telemetry,
-        }));
-        await saveConversation(saved);
-        setConversations((items) => upsertConversation(items, saved));
-        return;
-      }
-        const saved = withAssistantMessage({ ...pending, threadId }, finalizeAssistantMessage({
-          role: "assistant",
-          content: assistant || "(empty response)",
-          startedAtMs,
-          firstTokenAtMs,
-          telemetry: streamTelemetry,
-        }));
+        },
+        (delta) => {
+          if (delta.threadId) threadId = delta.threadId;
+          if (delta.progress) progressEvents = mergeProgressEvents(progressEvents, delta.progress);
+          if (!delta.content && !delta.telemetry && !delta.progress) {
+            setConversations((items) => upsertConversation(items, { ...waiting, threadId }));
+            return;
+          }
+          assistant += delta.content;
+          if (!firstTokenAtMs && delta.content) firstTokenAtMs = performance.now();
+          streamTelemetry = mergeTelemetry(streamTelemetry, delta.telemetry);
+          const streamingMessage: ChatMessage = {
+            role: "assistant",
+            content: assistant,
+            pending: true,
+            startedAtMs,
+            firstTokenAtMs,
+            telemetry: streamTelemetry,
+            progressEvents: progressEvents.length ? progressEvents : undefined,
+          };
+          const streamingConversation = withAssistantMessage({ ...pending, threadId }, streamingMessage);
+          setConversations((items) => upsertConversation(items, streamingConversation));
+        },
+      );
+      const saved = withAssistantMessage({ ...pending, threadId }, finalizeAssistantMessage({
+        role: "assistant",
+        content: assistant || "(empty response)",
+        startedAtMs,
+        firstTokenAtMs,
+        telemetry: streamTelemetry,
+        progressEvents: progressEvents.length ? progressEvents : undefined,
+      }));
       await saveConversation(saved);
       setConversations((items) => upsertConversation(items, saved));
     } catch (error) {
@@ -592,6 +587,7 @@ export function App() {
                   {telemetryChips(message).map((chip) => <span className="message-chip" key={chip}>{chip}</span>)}
                 </div>
               ) : null}
+              {message.role === "assistant" ? <AgentProgress events={message.progressEvents || []} /> : null}
               {message.pending && !message.content ? (
                 <div className="message-pending" data-testid="spitball-assistant-pending">
                   <span>Agent is responding</span>
@@ -810,6 +806,12 @@ function withAssistantMessage(conversation: Conversation, message: ChatMessage):
 function mergeTelemetry(current: ChatTelemetry | undefined, next: ChatTelemetry | undefined): ChatTelemetry | undefined {
   if (!current && !next) return undefined;
   return { ...(current || {}), ...(next || {}) };
+}
+
+function mergeProgressEvents(current: ChatProgressEvent[], next: ChatProgressEvent): ChatProgressEvent[] {
+  const index = current.findIndex((event) => event.id === next.id);
+  if (index < 0) return [...current, next];
+  return current.map((event, currentIndex) => (currentIndex === index ? next : event));
 }
 
 function finalizeAssistantMessage(message: ChatMessage): ChatMessage {
