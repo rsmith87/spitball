@@ -242,9 +242,41 @@ describe("App setup profile", () => {
 
     await waitFor(() => expect(saveProfile).toHaveBeenCalledTimes(2));
     expect(saveProfile.mock.calls[1][0]).toMatchObject({ defaultModel: "qwen-coder" });
-    expect(vi.mocked(runChatDiagnostics).mock.calls[1][2]).toMatchObject({ model: "qwen-coder" });
+    expect(runChatDiagnostics).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "New conversation" }));
     expect(screen.getByDisplayValue("Qwen Coder")).not.toBeNull();
+  });
+
+  it("tests backend connectivity without running a model diagnostic or replacing a stale selected model", async () => {
+    vi.mocked(getProfile).mockResolvedValueOnce({
+      ...savedProfile,
+      defaultModel: "already-running-model",
+      cachedModels: [
+        {
+          id: "already-running-model",
+          object: "model",
+          owned_by: "spitball",
+          metadata: {
+            display_label: "Already Running",
+            request_types: ["chat"],
+            default_request_type: "chat",
+            context_identity: "already-running-model",
+            model_family: "already-running-model",
+            context_profile: null,
+            capabilities: { streaming: true, json_schema: false, grammar: false, vision: false },
+          },
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openSettings(user);
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+
+    await waitFor(() => expect(saveProfile).toHaveBeenCalled());
+    expect(runChatDiagnostics).not.toHaveBeenCalled();
+    expect(saveProfile.mock.calls[0][0]).toMatchObject({ defaultModel: "already-running-model" });
   });
 
   it("starts a blank chat when creating a new conversation from existing history", async () => {

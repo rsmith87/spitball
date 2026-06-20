@@ -6,7 +6,6 @@ import remarkGfm from "remark-gfm";
 import { getClientDiscovery } from "../spitball/discovery";
 import { getClientSession } from "../spitball/session";
 import { listModels } from "../spitball/models";
-import { runChatDiagnostics } from "../spitball/diagnostics";
 import { getContextBudget, streamChat } from "../spitball/chat";
 import { createBackendProject, listBackendProjects } from "../spitball/projects";
 import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
@@ -230,22 +229,15 @@ export function App() {
       if (!auth) throw new Error("Enter an external app key before continuing.");
       const currentSession = await getClientSession(backendUrl, auth);
       const safeModels = currentSession.models.length ? currentSession.models : await listModels(backendUrl, auth);
-      const selectedSafeModel = safeModels.find((item) => item.id === selectedModel) || safeModels[0];
+      const selectedSafeModel = safeModels.find((item) => item.id === selectedModel);
       const selectedRequestType = selectedSafeModel?.metadata.request_types.includes(requestType || "")
         ? requestType
-        : selectedSafeModel?.metadata.default_request_type || selectedSafeModel?.metadata.request_types[0] || null;
+        : selectedSafeModel
+          ? selectedSafeModel.metadata.default_request_type || selectedSafeModel.metadata.request_types[0] || null
+          : requestType;
       setSession(currentSession);
       setModels(safeModels);
-      setSelectedModel(selectedSafeModel?.id || "");
       setRequestType(selectedRequestType);
-      if (!selectedSafeModel) throw new Error("No client-safe models were returned by this backend.");
-      const result = await runChatDiagnostics(backendUrl, auth, {
-        model: selectedSafeModel.id,
-        request_type: selectedRequestType,
-        stream: selectedSafeModel.metadata.capabilities.streaming,
-      });
-      setDiagnostic(result);
-      if (!result.ok) throw new Error(result.error?.detail || "Chat diagnostics failed.");
       await saveProfile({
         id: "default",
         name: discovered.mode === "controller" ? "Controller backend" : "Agent backend",
@@ -253,7 +245,7 @@ export function App() {
         backendMode: discovered.mode,
         authMode: "external_api_key",
         apiKey: rememberKey ? apiKey : undefined,
-        defaultModel: selectedSafeModel.id,
+        defaultModel: selectedModel,
         requestType: selectedRequestType,
         maxTokens,
         agentToolMaxIterations,
