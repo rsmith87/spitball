@@ -2,6 +2,7 @@ import { CheckCircle2, ClipboardPaste, Copy, Database, Download, FolderOpen, Key
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import { getClientDiscovery } from "../spitball/discovery";
 import { getClientSession } from "../spitball/session";
@@ -96,7 +97,7 @@ function MarkdownMessage({ content, onCodeBlockContextMenu }: { content: string;
 
   return (
     <div className="message-markdown" onContextMenu={handleContextMenu}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown rehypePlugins={[rehypeHighlight]} remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>
   );
 }

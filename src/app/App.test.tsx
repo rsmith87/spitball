@@ -545,6 +545,7 @@ describe("App setup profile", () => {
     expect(screen.getByRole("listitem").textContent).toContain("alpha item");
     expect(screen.getByRole("columnheader", { name: "File" })).not.toBeNull();
     expect(document.querySelector(".message-markdown code")?.textContent).toContain("const value = 1;");
+    expect(document.querySelector(".message-markdown code .hljs-keyword")?.textContent).toBe("const");
   });
 
   it("sends the Llama Pack thread id on later turns", async () => {
