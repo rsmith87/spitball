@@ -1,6 +1,8 @@
 import { CheckCircle2, Database, Download, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, PlugZap, Send, Settings, ShieldCheck, Sun, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { getClientDiscovery } from "../spitball/discovery";
 import { getClientSession } from "../spitball/session";
 import { listModels } from "../spitball/models";
@@ -14,11 +16,22 @@ import type { ConnectionProfile, Conversation, Project } from "../storage/types"
 import spitballLogo from "../styles/spitball-logo.png";
 
 const DEFAULT_MESSAGE = "Ask a private model about the current project.";
-const DEFAULT_MAX_TOKENS = 512;
+const DEFAULT_MAX_TOKENS = 1024;
+const DEFAULT_AGENT_TOOL_MAX_ITERATIONS = 12;
+const MAX_OUTPUT_TOKENS = 32768;
+const MAX_AGENT_TOOL_ITERATIONS = 16;
 type ConnectionStatus = "missing" | "loaded" | "checking" | "ready" | "failed";
 
 function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function clampMaxTokens(value: number): number {
+  return Math.min(MAX_OUTPUT_TOKENS, Math.max(1, value));
+}
+
+function clampAgentToolMaxIterations(value: number): number {
+  return Math.min(MAX_AGENT_TOOL_ITERATIONS, Math.max(1, value));
 }
 
 function formatCompactTokenCount(value: number): string {
@@ -39,6 +52,14 @@ function contextBudgetWarning(budget: ContextBudget): string {
   if (budget.status === "too_large") return "Too large to send. Remove context or reduce expected output.";
   if (budget.status === "near_limit") return "Near limit. Shorten older messages or start a new conversation.";
   return "";
+}
+
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <div className="message-markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+    </div>
+  );
 }
 
 function telemetryChips(message: ChatMessage): string[] {
@@ -69,6 +90,10 @@ export function App() {
   const [models, setModels] = useState<ClientModel[]>([]);
   const [selectedModel, setSelectedModel] = useState("");
   const [requestType, setRequestType] = useState<string | null>(null);
+  const [maxTokens, setMaxTokens] = useState(DEFAULT_MAX_TOKENS);
+  const [maxTokensInput, setMaxTokensInput] = useState(String(DEFAULT_MAX_TOKENS));
+  const [agentToolMaxIterations, setAgentToolMaxIterations] = useState(DEFAULT_AGENT_TOOL_MAX_ITERATIONS);
+  const [agentToolMaxIterationsInput, setAgentToolMaxIterationsInput] = useState(String(DEFAULT_AGENT_TOOL_MAX_ITERATIONS));
   const [agentToolsEnabled, setAgentToolsEnabled] = useState(false);
   const [diagnostic, setDiagnostic] = useState<ChatDiagnostic | null>(null);
   const [setupError, setSetupError] = useState("");
@@ -105,7 +130,7 @@ export function App() {
   }, [darkMode]);
 
   const auth = useMemo<AuthState | null>(() => (apiKey ? { mode: "external_api_key", apiKey } : null), [apiKey]);
-  const activeConversation = conversations.find((item) => item.id === activeId) || conversations[0];
+  const activeConversation = activeId ? conversations.find((item) => item.id === activeId) : undefined;
   const selectedProject = projects.find((item) => item.id === selectedProjectId) || projects[0] || null;
   const model = models.find((item) => item.id === selectedModel);
   const availableRequestTypes = model?.metadata.request_types || [];
@@ -125,6 +150,12 @@ export function App() {
       setBackendUrl(profile.backendUrl);
       setSelectedModel(profile.defaultModel);
       setRequestType(profile.requestType);
+      const savedMaxTokens = clampMaxTokens(profile.maxTokens || DEFAULT_MAX_TOKENS);
+      const savedAgentToolMaxIterations = clampAgentToolMaxIterations(profile.agentToolMaxIterations || DEFAULT_AGENT_TOOL_MAX_ITERATIONS);
+      setMaxTokens(savedMaxTokens);
+      setMaxTokensInput(String(savedMaxTokens));
+      setAgentToolMaxIterations(savedAgentToolMaxIterations);
+      setAgentToolMaxIterationsInput(String(savedAgentToolMaxIterations));
       setModels(profile.cachedModels || []);
       setSetupError(profile.lastConnectionError || "");
       if (profile.apiKey) {
@@ -152,8 +183,8 @@ export function App() {
       getContextBudget(
         backendUrl,
         auth,
-        { model: selectedModel, request_type: requestType, stream: false, messages },
-        DEFAULT_MAX_TOKENS,
+        { model: selectedModel, request_type: requestType, stream: false, max_tokens: maxTokens, agent_tool_max_iterations: agentToolMaxIterations, messages },
+        maxTokens,
       )
         .then((budget) => {
           setContextBudget(budget);
@@ -165,7 +196,7 @@ export function App() {
         });
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [activeConversation?.messages, auth, backendUrl, connectionStatus, draft, isSending, requestType, selectedModel]);
+  }, [activeConversation?.messages, agentToolMaxIterations, auth, backendUrl, connectionStatus, draft, isSending, maxTokens, requestType, selectedModel]);
 
   function markConnectionEdited() {
     if (connectionStatus !== "missing") setConnectionStatus("loaded");
@@ -209,6 +240,8 @@ export function App() {
         apiKey: rememberKey ? apiKey : undefined,
         defaultModel: selectedSafeModel.id,
         requestType: selectedRequestType,
+        maxTokens,
+        agentToolMaxIterations,
         validatedAt: new Date().toISOString(),
         cachedModels: safeModels,
       });
@@ -231,6 +264,8 @@ export function App() {
         apiKey: rememberKey ? apiKey : undefined,
         defaultModel: selectedModel,
         requestType,
+        maxTokens,
+        agentToolMaxIterations,
         lastConnectionError: message,
         cachedModels: models,
       });
@@ -308,7 +343,16 @@ export function App() {
         await streamChat(
           backendUrl,
           auth,
-          { model: selectedModel, request_type: requestType, stream: true, thread_id: threadId, messages: pending.messages, tool_runtime: toolRuntime },
+          {
+            model: selectedModel,
+            request_type: requestType,
+            stream: true,
+            max_tokens: maxTokens,
+            agent_tool_max_iterations: agentToolMaxIterations,
+            thread_id: threadId,
+            messages: pending.messages,
+            tool_runtime: toolRuntime,
+          },
           (delta) => {
             if (delta.threadId) threadId = delta.threadId;
             if (!delta.content && !delta.telemetry) {
@@ -331,7 +375,16 @@ export function App() {
           },
         );
       } else {
-        const result = await sendChat(backendUrl, auth, { model: selectedModel, request_type: requestType, stream: false, thread_id: threadId, messages: pending.messages, tool_runtime: toolRuntime });
+        const result = await sendChat(backendUrl, auth, {
+          model: selectedModel,
+          request_type: requestType,
+          stream: false,
+          max_tokens: maxTokens,
+          agent_tool_max_iterations: agentToolMaxIterations,
+          thread_id: threadId,
+          messages: pending.messages,
+          tool_runtime: toolRuntime,
+        });
         assistant = result.content;
         threadId = result.threadId || threadId;
         const saved = withAssistantMessage({ ...pending, threadId }, finalizeAssistantMessage({
@@ -549,7 +602,7 @@ export function App() {
                   </span>
                 </div>
               ) : (
-                <p>{message.content}</p>
+                message.role === "user" ? <p>{message.content}</p> : <MarkdownMessage content={message.content} />
               )}
             </article>
           ))}
@@ -631,6 +684,54 @@ export function App() {
                   setConnectionStatus(event.target.value ? "loaded" : "missing");
                   setSetupError("");
                   setDiagnostic(null);
+                }}
+              />
+            </label>
+            <label>
+              Max output tokens
+              <input
+                min={1}
+                max={MAX_OUTPUT_TOKENS}
+                type="number"
+                value={maxTokensInput}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setMaxTokensInput(value);
+                  const parsed = Number(value);
+                  if (Number.isFinite(parsed) && parsed > 0) {
+                    setMaxTokens(clampMaxTokens(parsed));
+                  }
+                  markConnectionEdited();
+                }}
+                onBlur={() => {
+                  const parsed = Number(maxTokensInput);
+                  const normalized = Number.isFinite(parsed) && parsed > 0 ? clampMaxTokens(parsed) : maxTokens;
+                  setMaxTokens(normalized);
+                  setMaxTokensInput(String(normalized));
+                }}
+              />
+            </label>
+            <label>
+              Agent tool max iterations
+              <input
+                min={1}
+                max={MAX_AGENT_TOOL_ITERATIONS}
+                type="number"
+                value={agentToolMaxIterationsInput}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setAgentToolMaxIterationsInput(value);
+                  const parsed = Number(value);
+                  if (Number.isFinite(parsed) && parsed > 0) {
+                    setAgentToolMaxIterations(clampAgentToolMaxIterations(parsed));
+                  }
+                  markConnectionEdited();
+                }}
+                onBlur={() => {
+                  const parsed = Number(agentToolMaxIterationsInput);
+                  const normalized = Number.isFinite(parsed) && parsed > 0 ? clampAgentToolMaxIterations(parsed) : agentToolMaxIterations;
+                  setAgentToolMaxIterations(normalized);
+                  setAgentToolMaxIterationsInput(String(normalized));
                 }}
               />
             </label>

@@ -7,6 +7,8 @@ export type ChatCompletionRequest = {
   messages: ChatMessage[];
   request_type?: string | null;
   stream: boolean;
+  max_tokens: number;
+  agent_tool_max_iterations?: number;
   thread_id?: string;
   tool_runtime?: "agent";
 };

@@ -26,11 +26,41 @@ describe("sendChat", () => {
           model: "qwen",
           messages: [{ role: "user", content: "use tools" }],
           stream: false,
+          max_tokens: 1024,
           tool_runtime: "agent",
         },
       ),
     ).rejects.toThrow(
       "Agent tools could not run: the selected agent has tools disabled or no tool catalog/profile configured. Enable agent tools on that node, then try again. Backend detail: agent tool runtime is not enabled",
+    );
+  });
+
+  it("sends agent tool max iteration overrides", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          tool_runtime: "agent",
+          agent_tool_max_iterations: 12,
+        });
+        return new Response(JSON.stringify({ choices: [{ message: { content: "assistant ok" } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    await sendChat(
+      "http://controller.local",
+      { mode: "external_api_key", apiKey: "key" },
+      {
+        model: "qwen",
+        messages: [{ role: "user", content: "use tools" }],
+        stream: false,
+        max_tokens: 1024,
+        tool_runtime: "agent",
+        agent_tool_max_iterations: 12,
+      },
     );
   });
 
@@ -73,6 +103,7 @@ describe("sendChat", () => {
         messages: [{ role: "user", content: "hello" }],
         request_type: "chat",
         stream: false,
+        max_tokens: 512,
       },
       512,
     );
@@ -83,7 +114,8 @@ describe("sendChat", () => {
   it("returns assistant content with non-streaming telemetry", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toMatchObject({ max_tokens: 2048 });
         return new Response(
           JSON.stringify({
             choices: [{ message: { content: "assistant ok" } }],
@@ -103,6 +135,7 @@ describe("sendChat", () => {
         model: "qwen",
         messages: [{ role: "user", content: "hello" }],
         stream: false,
+        max_tokens: 2048,
       },
     );
 
@@ -123,7 +156,8 @@ describe("sendChat", () => {
     const encoder = new TextEncoder();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toMatchObject({ max_tokens: 3072 });
         return new Response(
           new ReadableStream({
             start(controller) {
@@ -147,6 +181,7 @@ describe("sendChat", () => {
         model: "qwen",
         messages: [{ role: "user", content: "hello" }],
         stream: true,
+        max_tokens: 3072,
       },
       (delta) => deltas.push(delta),
     );
@@ -192,6 +227,7 @@ describe("sendChat", () => {
         model: "qwen",
         messages: [{ role: "user", content: "hello" }],
         stream: true,
+        max_tokens: 1024,
       },
       (delta) => deltas.push(delta),
     );

@@ -6,6 +6,7 @@ import { App } from "./App";
 import { getContextBudget, sendChat, streamChat } from "../spitball/chat";
 import { runChatDiagnostics } from "../spitball/diagnostics";
 import { getProfile } from "../storage";
+import type { Conversation } from "../storage/types";
 
 const savedProfile = {
   id: "default",
@@ -20,6 +21,7 @@ const savedProfile = {
 
 const saveProfile = vi.fn();
 const saveProject = vi.fn();
+let storedConversations: Conversation[] = [];
 const storedProjects = [
   {
     id: "project-llama-pack",
@@ -32,7 +34,7 @@ const storedProjects = [
 
 vi.mock("../storage", () => ({
   getProfile: vi.fn(async () => savedProfile),
-  listConversations: vi.fn(async () => []),
+  listConversations: vi.fn(async () => storedConversations),
   listProjects: vi.fn(async () => storedProjects),
   saveConversation: vi.fn(async () => "chat-1"),
   saveProfile: (...args: unknown[]) => saveProfile(...args),
@@ -133,6 +135,7 @@ describe("App setup profile", () => {
   beforeEach(() => {
     saveProfile.mockClear();
     saveProject.mockClear();
+    storedConversations = [];
     vi.mocked(sendChat).mockClear();
     vi.mocked(streamChat).mockClear();
     vi.mocked(streamChat).mockImplementation(async (_baseUrl, _auth, _request, onToken) => {
@@ -194,6 +197,36 @@ describe("App setup profile", () => {
     expect(saveProfile.mock.calls[0][0]).toMatchObject({ apiKey: "nxa_saved_key", validatedAt: expect.any(String) });
   });
 
+  it("defaults and saves the max output token setting", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openSettings(user);
+    const input = await screen.findByLabelText("Max output tokens");
+    expect(input).toHaveProperty("value", "1024");
+    await user.clear(input);
+    await user.type(input, "4096");
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+
+    await waitFor(() => expect(saveProfile).toHaveBeenCalled());
+    expect(saveProfile.mock.calls[0][0]).toMatchObject({ maxTokens: 4096 });
+  });
+
+  it("defaults and saves the agent tool max iteration setting", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openSettings(user);
+    const input = await screen.findByLabelText("Agent tool max iterations");
+    expect(input).toHaveProperty("value", "12");
+    await user.clear(input);
+    await user.type(input, "12");
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+
+    await waitFor(() => expect(saveProfile).toHaveBeenCalled());
+    expect(saveProfile.mock.calls[0][0]).toMatchObject({ agentToolMaxIterations: 12 });
+  });
+
   it("keeps the selected model when testing the connection again", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -212,6 +245,32 @@ describe("App setup profile", () => {
     expect(vi.mocked(runChatDiagnostics).mock.calls[1][2]).toMatchObject({ model: "qwen-coder" });
     await user.click(screen.getByRole("button", { name: "New conversation" }));
     expect(screen.getByDisplayValue("Qwen Coder")).not.toBeNull();
+  });
+
+  it("starts a blank chat when creating a new conversation from existing history", async () => {
+    storedConversations = [
+      {
+        id: "chat-existing",
+        title: "Existing chat",
+        model: "gemma-4-E4B-it",
+        requestType: "chat",
+        threadId: "thread-existing",
+        messages: [
+          { role: "user", content: "old prompt" },
+          { role: "assistant", content: "old reply" },
+        ],
+        updatedAt: "2026-06-18T10:00:00.000Z",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Existing chat" })).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "New conversation" }));
+
+    expect(screen.getByRole("heading", { name: "New private chat" })).not.toBeNull();
+    expect(screen.queryByText("old prompt")).toBeNull();
   });
 
   it("sends with Enter and keeps Shift Enter as a newline", async () => {
@@ -241,7 +300,25 @@ describe("App setup profile", () => {
 
     await waitFor(() => expect(streamChat).toHaveBeenCalled());
     expect(sendChat).not.toHaveBeenCalled();
-    expect(vi.mocked(streamChat).mock.calls[0][2]).toMatchObject({ stream: true });
+    expect(vi.mocked(streamChat).mock.calls[0][2]).toMatchObject({ stream: true, max_tokens: 1024 });
+  });
+
+  it("renders assistant markdown in streamed responses", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(async (_baseUrl, _auth, _request, onToken) => {
+      onToken({ content: "## Summary\n\n- alpha item\n\n| File | Role |\n| --- | --- |\n| runner.py | core |\n\n```ts\nconst value = 1;\n```" });
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "markdown please");
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByRole("heading", { name: "Summary" })).not.toBeNull();
+    expect(screen.getByRole("listitem").textContent).toContain("alpha item");
+    expect(screen.getByRole("columnheader", { name: "File" })).not.toBeNull();
+    expect(document.querySelector(".message-markdown code")?.textContent).toContain("const value = 1;");
   });
 
   it("sends the Llama Pack thread id on later turns", async () => {
@@ -333,7 +410,12 @@ describe("App setup profile", () => {
     expect(screen.getByTestId("spitball-context-budget").textContent).toContain("Prompt 14.0k");
     expect(screen.getByTestId("spitball-context-budget").textContent).toContain("Reserved output 512");
     expect(screen.getByRole("progressbar", { name: "Context used" }).getAttribute("aria-valuenow")).toBe("44");
-    expect(getContextBudget).toHaveBeenCalled();
+    expect(getContextBudget).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Object),
+      1024,
+    );
   });
 
   it("shows context pressure styling and warning near the limit", async () => {
@@ -396,7 +478,12 @@ describe("App setup profile", () => {
 
     await waitFor(() => expect(sendChat).toHaveBeenCalled());
     expect(streamChat).not.toHaveBeenCalled();
-    expect(vi.mocked(sendChat).mock.calls[0][2]).toMatchObject({ stream: false, tool_runtime: "agent" });
+    expect(vi.mocked(sendChat).mock.calls[0][2]).toMatchObject({
+      stream: false,
+      tool_runtime: "agent",
+      max_tokens: 1024,
+      agent_tool_max_iterations: 12,
+    });
   });
 
   it("opens setup controls from the Settings sidebar item", async () => {

@@ -9,6 +9,8 @@ export type ConnectionProfile = {
   apiKey?: string;
   defaultModel: string;
   requestType: string | null;
+  maxTokens?: number;
+  agentToolMaxIterations?: number;
   validatedAt?: string;
   lastConnectionError?: string;
   cachedModels?: ClientModel[];
