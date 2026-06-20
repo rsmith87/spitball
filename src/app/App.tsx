@@ -819,5 +819,17 @@ function finalizeAssistantMessage(message: ChatMessage): ChatMessage {
     ...message,
     pending: false,
     telemetry,
+    progressEvents: message.progressEvents ? finalizeProgressEvents(message.progressEvents) : undefined,
   };
+}
+
+function finalizeProgressEvents(events: ChatProgressEvent[]): ChatProgressEvent[] {
+  return events.map((event) => {
+    if (event.id !== "assistant-generating") return event;
+    return {
+      ...event,
+      label: "Generated",
+      status: "passed",
+    };
+  });
 }

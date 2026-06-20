@@ -522,7 +522,7 @@ describe("App setup profile", () => {
 
   it("renders streamed agent tool progress pills", async () => {
     vi.mocked(streamChat).mockImplementationOnce(async (_baseUrl, _auth, _request, onToken) => {
-      onToken({ content: "", progress: { id: "evt-1", type: "status", status: "running", label: "Generating" } });
+      onToken({ content: "", progress: { id: "assistant-generating", type: "status", status: "running", label: "Generating" } });
       onToken({
         content: "",
         progress: {
@@ -558,11 +558,12 @@ describe("App setup profile", () => {
     await user.keyboard("{Enter}");
 
     await waitFor(() => expect(screen.getByText("assistant verified")).not.toBeNull());
-    expect(screen.getByText("Generating")).not.toBeNull();
+    expect(screen.getByText("Generated")).not.toBeNull();
+    expect(screen.queryByText("Generating")).toBeNull();
     expect(screen.getByText("read_project_file")).not.toBeNull();
     expect(screen.getByText("runner.py")).not.toBeNull();
     expect(screen.getByText("Reviewing generation")).not.toBeNull();
-    expect(document.querySelector('.agent-progress-pill[data-status="passed"]')).not.toBeNull();
+    expect(document.querySelector('.agent-progress-pill[data-status="running"]')?.textContent).not.toContain("Generated");
   });
 
   it("opens setup controls from the Settings sidebar item", async () => {
