@@ -47,6 +47,10 @@ export function listConversations(): Promise<Conversation[]> {
   );
 }
 
+export function deleteConversation(id: string): Promise<void> {
+  return tx("conversations", "readwrite", (store) => store.delete(id));
+}
+
 export function saveTaxonomyItem(item: TaxonomyItem): Promise<IDBValidKey> {
   return tx("taxonomyItems", "readwrite", (store) => store.put(item));
 }

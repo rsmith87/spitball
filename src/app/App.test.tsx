@@ -21,8 +21,10 @@ const savedProfile = {
 
 const saveProfile = vi.fn();
 const saveProject = vi.fn();
+const saveConversation = vi.fn();
 const saveTaxonomyItem = vi.fn();
 const deleteTaxonomyItem = vi.fn();
+const deleteConversation = vi.fn();
 let storedConversations: Conversation[] = [];
 let storedTaxonomyItems: TaxonomyItem[] = [];
 const storedProjects = [
@@ -40,7 +42,8 @@ vi.mock("../storage", () => ({
   listConversations: vi.fn(async () => storedConversations),
   listProjects: vi.fn(async () => storedProjects),
   listTaxonomyItems: vi.fn(async () => storedTaxonomyItems),
-  saveConversation: vi.fn(async () => "chat-1"),
+  saveConversation: (...args: unknown[]) => saveConversation(...args),
+  deleteConversation: (...args: unknown[]) => deleteConversation(...args),
   saveProfile: (...args: unknown[]) => saveProfile(...args),
   saveProject: (...args: unknown[]) => saveProject(...args),
   saveTaxonomyItem: (...args: unknown[]) => saveTaxonomyItem(...args),
@@ -141,8 +144,10 @@ describe("App setup profile", () => {
   beforeEach(() => {
     saveProfile.mockClear();
     saveProject.mockClear();
+    saveConversation.mockClear();
     saveTaxonomyItem.mockClear();
     deleteTaxonomyItem.mockClear();
+    deleteConversation.mockClear();
     storedConversations = [];
     storedTaxonomyItems = [];
     vi.mocked(sendChat).mockClear();
@@ -348,6 +353,54 @@ describe("App setup profile", () => {
     expect(screen.queryByText("Client work")).toBeNull();
   });
 
+  it("renames, buckets, and deletes conversations from the history context menu", async () => {
+    storedTaxonomyItems = [
+      {
+        id: "bucket-work",
+        name: "Work",
+        createdAt: "2026-06-18T10:00:00.000Z",
+        updatedAt: "2026-06-18T10:00:00.000Z",
+      },
+    ];
+    storedConversations = [
+      {
+        id: "chat-existing",
+        title: "Existing chat",
+        model: "gemma-4-E4B-it",
+        requestType: "chat",
+        messages: [{ role: "user", content: "old prompt" }],
+        updatedAt: "2026-06-18T10:00:00.000Z",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+
+    const conversation = await screen.findByRole("button", { name: /Existing chat/ });
+    fireEvent.contextMenu(conversation, { clientX: 24, clientY: 48 });
+
+    expect(screen.getByRole("menu", { name: "Conversation context menu" })).not.toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Edit title" }));
+    const titleInput = screen.getByLabelText("Conversation title");
+    await user.clear(titleInput);
+    await user.type(titleInput, "Renamed chat");
+    await user.click(screen.getByRole("button", { name: "Save title" }));
+
+    expect(saveConversation).toHaveBeenCalledWith(expect.objectContaining({ id: "chat-existing", title: "Renamed chat" }));
+    expect(screen.getByRole("button", { name: /Renamed chat/ })).not.toBeNull();
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Renamed chat/ }), { clientX: 24, clientY: 48 });
+    await user.click(screen.getByRole("menuitem", { name: "Work" }));
+
+    expect(saveConversation).toHaveBeenCalledWith(expect.objectContaining({ id: "chat-existing", taxonomyItemId: "bucket-work" }));
+    expect(await screen.findByText("Bucket: Work")).not.toBeNull();
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /Renamed chat/ }), { clientX: 24, clientY: 48 });
+    await user.click(screen.getByRole("menuitem", { name: "Delete conversation" }));
+
+    expect(deleteConversation).toHaveBeenCalledWith("chat-existing");
+    expect(screen.queryByText("Renamed chat")).toBeNull();
+  });
+
   it("sends with Enter and keeps Shift Enter as a newline", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -392,6 +445,74 @@ describe("App setup profile", () => {
 
     expect(composer.value).toBe("copy me pasted");
     expect(clipboard.readText).toHaveBeenCalled();
+  });
+
+  it("copies a whole chat message from the message right click menu", async () => {
+    storedConversations = [
+      {
+        id: "chat-existing",
+        title: "Existing chat",
+        model: "gemma-4-E4B-it",
+        requestType: "chat",
+        messages: [{ role: "user", content: "copy this whole prompt" }],
+        updatedAt: "2026-06-18T10:00:00.000Z",
+      },
+    ];
+    const user = userEvent.setup();
+    const clipboard = {
+      readText: vi.fn(async () => ""),
+      writeText: vi.fn(async () => undefined),
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+    render(<App />);
+
+    const message = await screen.findByText("copy this whole prompt");
+    fireEvent.contextMenu(message.closest("article") as HTMLElement, { clientX: 24, clientY: 48 });
+
+    expect(screen.getByRole("menu", { name: "Message context menu" })).not.toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Copy message" }));
+
+    expect(clipboard.writeText).toHaveBeenCalledWith("copy this whole prompt");
+  });
+
+  it("copies assistant markdown code from the code block right click menu", async () => {
+    storedConversations = [
+      {
+        id: "chat-existing",
+        title: "Existing chat",
+        model: "gemma-4-E4B-it",
+        requestType: "chat",
+        messages: [{ role: "assistant", content: "```ts\nconst value = 1;\n```" }],
+        updatedAt: "2026-06-18T10:00:00.000Z",
+      },
+    ];
+    const user = userEvent.setup();
+    const clipboard = {
+      readText: vi.fn(async () => ""),
+      writeText: vi.fn(async () => undefined),
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+    render(<App />);
+
+    let code: HTMLElement | null = null;
+    await waitFor(() => {
+      const codeElement = document.querySelector(".message-markdown code");
+      code = codeElement instanceof HTMLElement ? codeElement : null;
+      expect(code).not.toBeNull();
+    });
+    if (!code) throw new Error("Expected rendered code block.");
+    fireEvent.contextMenu(code, { clientX: 24, clientY: 48 });
+
+    expect(screen.getByRole("menu", { name: "Code block context menu" })).not.toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Copy code" }));
+
+    expect(clipboard.writeText).toHaveBeenCalledWith("const value = 1;");
   });
 
   it("streams regular chat requests", async () => {
@@ -668,6 +789,27 @@ describe("App setup profile", () => {
     expect(screen.getByText(/Backend tools can use this project only after its root is allowed in Llama Pack safe dirs/i)).not.toBeNull();
     expect(screen.getByText("Project: Llama Pack")).not.toBeNull();
     expect(document.querySelector(".app-shell.project-active")).not.toBeNull();
+  });
+
+  it("copies a project root from the project right click menu", async () => {
+    const user = userEvent.setup();
+    const clipboard = {
+      readText: vi.fn(async () => ""),
+      writeText: vi.fn(async () => undefined),
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+    render(<App />);
+
+    const project = await screen.findByRole("button", { name: /Llama Pack/ });
+    fireEvent.contextMenu(project, { clientX: 24, clientY: 48 });
+
+    expect(screen.getByRole("menu", { name: "Project context menu" })).not.toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Copy project root" }));
+
+    expect(clipboard.writeText).toHaveBeenCalledWith("/Users/robertsmith/Apps/llama-pack");
   });
 
   it("collapses and expands projects from the sidebar", async () => {

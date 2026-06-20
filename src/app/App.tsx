@@ -10,7 +10,7 @@ import { getContextBudget, streamChat } from "../spitball/chat";
 import { createBackendProject, listBackendProjects } from "../spitball/projects";
 import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
-import { deleteTaxonomyItem, getProfile, listConversations, listProjects, listTaxonomyItems, saveConversation, saveProfile, saveProject, saveTaxonomyItem } from "../storage";
+import { deleteConversation, deleteTaxonomyItem, getProfile, listConversations, listProjects, listTaxonomyItems, saveConversation, saveProfile, saveProject, saveTaxonomyItem } from "../storage";
 import type { ConnectionProfile, Conversation, Project, TaxonomyItem } from "../storage/types";
 import spitballLogo from "../styles/spitball-logo.png";
 
@@ -25,6 +25,31 @@ type ComposerContextMenu = {
   y: number;
   selectionStart: number;
   selectionEnd: number;
+  error: string;
+};
+type ConversationContextMenu = {
+  x: number;
+  y: number;
+  conversationId: string;
+  mode: "actions" | "editTitle";
+  titleDraft: string;
+};
+type MessageContextMenu = {
+  x: number;
+  y: number;
+  content: string;
+  error: string;
+};
+type CodeBlockContextMenu = {
+  x: number;
+  y: number;
+  code: string;
+  error: string;
+};
+type ProjectContextMenu = {
+  x: number;
+  y: number;
+  projectId: string;
   error: string;
 };
 
@@ -60,9 +85,17 @@ function contextBudgetWarning(budget: ContextBudget): string {
   return "";
 }
 
-function MarkdownMessage({ content }: { content: string }) {
+function MarkdownMessage({ content, onCodeBlockContextMenu }: { content: string; onCodeBlockContextMenu: (event: ReactMouseEvent<HTMLDivElement>, code: string) => void }) {
+  function handleContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const codeElement = target.closest("pre code");
+    if (!codeElement) return;
+    onCodeBlockContextMenu(event, codeElement.textContent || "");
+  }
+
   return (
-    <div className="message-markdown">
+    <div className="message-markdown" onContextMenu={handleContextMenu}>
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>
   );
@@ -158,6 +191,10 @@ export function App() {
   const [draft, setDraft] = useState(DEFAULT_MESSAGE);
   const [isSending, setIsSending] = useState(false);
   const [composerContextMenu, setComposerContextMenu] = useState<ComposerContextMenu | null>(null);
+  const [conversationContextMenu, setConversationContextMenu] = useState<ConversationContextMenu | null>(null);
+  const [messageContextMenu, setMessageContextMenu] = useState<MessageContextMenu | null>(null);
+  const [codeBlockContextMenu, setCodeBlockContextMenu] = useState<CodeBlockContextMenu | null>(null);
+  const [projectContextMenu, setProjectContextMenu] = useState<ProjectContextMenu | null>(null);
   const [darkMode, setDarkMode] = useState(() => {
     try {
       return localStorage.getItem("spitball-theme") === "dark";
@@ -224,12 +261,22 @@ export function App() {
   }, [activeConversation?.messages, isSending]);
 
   useEffect(() => {
-    if (!composerContextMenu) return;
+    if (!composerContextMenu && !conversationContextMenu && !messageContextMenu && !codeBlockContextMenu && !projectContextMenu) return;
     function closeOnWindowClick() {
       setComposerContextMenu(null);
+      setConversationContextMenu(null);
+      setMessageContextMenu(null);
+      setCodeBlockContextMenu(null);
+      setProjectContextMenu(null);
     }
     function closeOnEscape(event: globalThis.KeyboardEvent) {
-      if (event.key === "Escape") setComposerContextMenu(null);
+      if (event.key === "Escape") {
+        setComposerContextMenu(null);
+        setConversationContextMenu(null);
+        setMessageContextMenu(null);
+        setCodeBlockContextMenu(null);
+        setProjectContextMenu(null);
+      }
     }
     window.addEventListener("click", closeOnWindowClick);
     window.addEventListener("scroll", closeOnWindowClick, true);
@@ -239,7 +286,7 @@ export function App() {
       window.removeEventListener("scroll", closeOnWindowClick, true);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [composerContextMenu]);
+  }, [codeBlockContextMenu, composerContextMenu, conversationContextMenu, messageContextMenu, projectContextMenu]);
 
   useEffect(() => {
     if (connectionStatus !== "ready" || !auth || !selectedModel || isSending || !draft.trim()) {
@@ -297,6 +344,7 @@ export function App() {
     event.preventDefault();
     const textarea = event.currentTarget;
     const position = contextMenuPosition(event.clientX, event.clientY);
+    closeObjectContextMenus();
     setComposerContextMenu({
       x: position.x,
       y: position.y,
@@ -310,9 +358,147 @@ export function App() {
     setComposerContextMenu(null);
   }
 
+  function closeObjectContextMenus() {
+    setConversationContextMenu(null);
+    setMessageContextMenu(null);
+    setCodeBlockContextMenu(null);
+    setProjectContextMenu(null);
+  }
+
+  function conversationBucketName(conversation: Conversation): string {
+    const item = taxonomyItems.find((current) => current.id === conversation.taxonomyItemId);
+    return item?.name || "";
+  }
+
+  function openConversationContextMenu(event: ReactMouseEvent<HTMLButtonElement>, conversation: Conversation) {
+    event.preventDefault();
+    const position = contextMenuPosition(event.clientX, event.clientY);
+    setComposerContextMenu(null);
+    setMessageContextMenu(null);
+    setCodeBlockContextMenu(null);
+    setProjectContextMenu(null);
+    setConversationContextMenu({
+      x: position.x,
+      y: position.y,
+      conversationId: conversation.id,
+      mode: "actions",
+      titleDraft: conversation.title,
+    });
+  }
+
+  function openMessageContextMenu(event: ReactMouseEvent<HTMLElement>, message: ChatMessage) {
+    event.preventDefault();
+    const position = contextMenuPosition(event.clientX, event.clientY);
+    setComposerContextMenu(null);
+    setConversationContextMenu(null);
+    setCodeBlockContextMenu(null);
+    setProjectContextMenu(null);
+    setMessageContextMenu({
+      x: position.x,
+      y: position.y,
+      content: message.content,
+      error: "",
+    });
+  }
+
+  function openCodeBlockContextMenu(event: ReactMouseEvent<HTMLElement>, code: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    const position = contextMenuPosition(event.clientX, event.clientY);
+    setComposerContextMenu(null);
+    setConversationContextMenu(null);
+    setMessageContextMenu(null);
+    setProjectContextMenu(null);
+    setCodeBlockContextMenu({
+      x: position.x,
+      y: position.y,
+      code,
+      error: "",
+    });
+  }
+
+  function openProjectContextMenu(event: ReactMouseEvent<HTMLButtonElement>, project: Project) {
+    event.preventDefault();
+    const position = contextMenuPosition(event.clientX, event.clientY);
+    setComposerContextMenu(null);
+    setConversationContextMenu(null);
+    setMessageContextMenu(null);
+    setCodeBlockContextMenu(null);
+    setProjectContextMenu({
+      x: position.x,
+      y: position.y,
+      projectId: project.id,
+      error: "",
+    });
+  }
+
+  function setConversationMenuEditMode() {
+    setConversationContextMenu((current) => current ? { ...current, mode: "editTitle" } : current);
+  }
+
+  function updateConversationTitleDraft(value: string) {
+    setConversationContextMenu((current) => current ? { ...current, titleDraft: value } : current);
+  }
+
+  async function saveConversationTitle() {
+    if (!conversationContextMenu) return;
+    const title = conversationContextMenu.titleDraft.trim();
+    const conversation = conversations.find((item) => item.id === conversationContextMenu.conversationId);
+    if (!conversation || !title) return;
+    const updated: Conversation = { ...conversation, title, updatedAt: new Date().toISOString() };
+    await saveConversation(updated);
+    setConversations((items) => upsertConversation(items, updated));
+    setConversationContextMenu(null);
+  }
+
+  async function moveConversationToBucket(taxonomyItemId: string) {
+    if (!conversationContextMenu) return;
+    const conversation = conversations.find((item) => item.id === conversationContextMenu.conversationId);
+    if (!conversation) return;
+    const updated: Conversation = { ...conversation, taxonomyItemId, updatedAt: new Date().toISOString() };
+    await saveConversation(updated);
+    setConversations((items) => upsertConversation(items, updated));
+    setConversationContextMenu(null);
+  }
+
+  async function removeConversationFromBucket() {
+    if (!conversationContextMenu) return;
+    const conversation = conversations.find((item) => item.id === conversationContextMenu.conversationId);
+    if (!conversation) return;
+    const { taxonomyItemId: _taxonomyItemId, ...withoutBucket } = conversation;
+    const updated: Conversation = { ...withoutBucket, updatedAt: new Date().toISOString() };
+    await saveConversation(updated);
+    setConversations((items) => upsertConversation(items, updated));
+    setConversationContextMenu(null);
+  }
+
+  async function removeConversation() {
+    if (!conversationContextMenu) return;
+    const conversationId = conversationContextMenu.conversationId;
+    await deleteConversation(conversationId);
+    setConversations((items) => items.filter((item) => item.id !== conversationId));
+    setActiveId((current) => current === conversationId ? "" : current);
+    setConversationContextMenu(null);
+  }
+
   function setComposerContextMenuError(error: unknown) {
     const message = error instanceof Error ? error.message : "Clipboard action failed.";
     setComposerContextMenu((current) => current ? { ...current, error: message } : current);
+  }
+
+  function setMessageContextMenuError(error: unknown) {
+    const message = error instanceof Error ? error.message : "Clipboard action failed.";
+    setMessageContextMenu((current) => current ? { ...current, error: message } : current);
+  }
+
+  function setCodeBlockContextMenuError(error: unknown) {
+    const message = error instanceof Error ? error.message : "Clipboard action failed.";
+    setCodeBlockContextMenu((current) => current ? { ...current, error: message } : current);
+  }
+
+  function setProjectContextMenuError(error: unknown) {
+    const message = error instanceof Error ? error.message : "Clipboard action failed.";
+    setProjectContextMenu((current) => current ? { ...current, error: message } : current);
   }
 
   async function copyComposerSelection() {
@@ -355,6 +541,38 @@ export function App() {
   function selectAllComposerText() {
     setComposerContextMenu(null);
     focusComposerSelection(0, draft.length);
+  }
+
+  async function copyMessageContent() {
+    try {
+      if (!messageContextMenu) throw new Error("Cannot copy message: no message is active.");
+      await requireClipboard("copy message").writeText(messageContextMenu.content);
+      setMessageContextMenu(null);
+    } catch (error) {
+      setMessageContextMenuError(error);
+    }
+  }
+
+  async function copyCodeBlockContent() {
+    try {
+      if (!codeBlockContextMenu) throw new Error("Cannot copy code: no code block is active.");
+      await requireClipboard("copy code").writeText(codeBlockContextMenu.code.trimEnd());
+      setCodeBlockContextMenu(null);
+    } catch (error) {
+      setCodeBlockContextMenuError(error);
+    }
+  }
+
+  async function copyProjectRoot() {
+    try {
+      if (!projectContextMenu) throw new Error("Cannot copy project root: no project is active.");
+      const project = projects.find((item) => item.id === projectContextMenu.projectId);
+      if (!project) throw new Error(`Cannot copy project root: project ${projectContextMenu.projectId} was not found.`);
+      await requireClipboard("copy project root").writeText(project.root);
+      setProjectContextMenu(null);
+    } catch (error) {
+      setProjectContextMenuError(error);
+    }
   }
 
   async function runSetup() {
@@ -631,16 +849,60 @@ export function App() {
               <button
                 className={`conversation-row ${conversation.id === activeConversation?.id ? "active" : ""}`}
                 key={conversation.id}
+                onContextMenu={(event) => openConversationContextMenu(event, conversation)}
                 onClick={() => {
                   setActiveId(conversation.id);
                   setActiveView("chat");
                 }}
               >
                 <span>{conversation.title}</span>
-                <small>{conversation.model}</small>
+                <small>{conversationBucketName(conversation) ? `Bucket: ${conversationBucketName(conversation)}` : conversation.model}</small>
               </button>
             ))}
           </div>
+          {conversationContextMenu ? (
+            <div
+              aria-label="Conversation context menu"
+              className="composer-context-menu conversation-context-menu"
+              role="menu"
+              style={{ left: conversationContextMenu.x, top: conversationContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.preventDefault()}
+            >
+              {conversationContextMenu.mode === "editTitle" ? (
+                <div className="conversation-title-editor">
+                  <label>
+                    Conversation title
+                    <input value={conversationContextMenu.titleDraft} onChange={(event) => updateConversationTitleDraft(event.target.value)} />
+                  </label>
+                  <button type="button" onClick={() => void saveConversationTitle()} disabled={!conversationContextMenu.titleDraft.trim()}>
+                    <CheckCircle2 size={15} /> Save title
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <button type="button" role="menuitem" onClick={setConversationMenuEditMode}>
+                    <Pencil size={15} /> Edit title
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => void removeConversation()}>
+                    <Trash2 size={15} /> Delete conversation
+                  </button>
+                  <div className="context-menu-section-label">Move to group</div>
+                  {taxonomyItems.length === 0 ? <div className="context-menu-empty">No buckets saved</div> : null}
+                  {taxonomyItems.map((item) => (
+                    <button type="button" role="menuitem" key={item.id} onClick={() => void moveConversationToBucket(item.id)}>
+                      <Tags size={15} /> {item.name}
+                    </button>
+                  ))}
+                  {conversations.find((item) => item.id === conversationContextMenu.conversationId)?.taxonomyItemId ? (
+                    <button type="button" role="menuitem" onClick={() => void removeConversationFromBucket()}>
+                      <XCircle size={15} /> Remove from group
+                    </button>
+                  ) : null}
+                </>
+              )}
+            </div>
+          ) : null}
         </section>
 
         <section className="context-box taxonomy-box">
@@ -752,6 +1014,7 @@ export function App() {
                       className={`project-row ${project.id === selectedProject?.id ? "active" : ""}`}
                       key={project.id}
                       type="button"
+                      onContextMenu={(event) => openProjectContextMenu(event, project)}
                       onClick={() => {
                         setSelectedProjectId(project.id);
                         setProjectsExpanded(false);
@@ -762,6 +1025,21 @@ export function App() {
                     </button>
                   ))}
                 </div>
+                {projectContextMenu ? (
+                  <div
+                    aria-label="Project context menu"
+                    className="composer-context-menu project-context-menu"
+                    role="menu"
+                    style={{ left: projectContextMenu.x, top: projectContextMenu.y }}
+                    onClick={(event) => event.stopPropagation()}
+                    onMouseDown={(event) => event.preventDefault()}
+                  >
+                    <button type="button" role="menuitem" onClick={() => void copyProjectRoot()}>
+                      <Copy size={15} /> Copy project root
+                    </button>
+                    {projectContextMenu.error ? <div className="composer-context-error" role="status">{projectContextMenu.error}</div> : null}
+                  </div>
+                ) : null}
                 <div className="safe-dir-note">
                   Backend tools can use this project only after its root is allowed in Llama Pack safe dirs.
                 </div>
@@ -820,7 +1098,11 @@ export function App() {
             </div>
           ) : null}
           {activeConversation?.messages.map((message, index) => (
-            <article key={`${message.role}-${index}`} className={`message ${message.role}`}>
+            <article
+              key={`${message.role}-${index}`}
+              className={`message ${message.role}`}
+              onContextMenu={(event) => openMessageContextMenu(event, message)}
+            >
               <div className="message-role">{message.role}</div>
               {telemetryChips(message).length ? (
                 <div className="message-chips">
@@ -838,10 +1120,40 @@ export function App() {
                   </span>
                 </div>
               ) : (
-                message.role === "user" ? <p>{message.content}</p> : <MarkdownMessage content={message.content} />
+                message.role === "user" ? <p>{message.content}</p> : <MarkdownMessage content={message.content} onCodeBlockContextMenu={openCodeBlockContextMenu} />
               )}
             </article>
           ))}
+          {messageContextMenu ? (
+            <div
+              aria-label="Message context menu"
+              className="composer-context-menu message-context-menu"
+              role="menu"
+              style={{ left: messageContextMenu.x, top: messageContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.preventDefault()}
+            >
+              <button type="button" role="menuitem" onClick={() => void copyMessageContent()}>
+                <Copy size={15} /> Copy message
+              </button>
+              {messageContextMenu.error ? <div className="composer-context-error" role="status">{messageContextMenu.error}</div> : null}
+            </div>
+          ) : null}
+          {codeBlockContextMenu ? (
+            <div
+              aria-label="Code block context menu"
+              className="composer-context-menu code-block-context-menu"
+              role="menu"
+              style={{ left: codeBlockContextMenu.x, top: codeBlockContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.preventDefault()}
+            >
+              <button type="button" role="menuitem" onClick={() => void copyCodeBlockContent()}>
+                <Copy size={15} /> Copy code
+              </button>
+              {codeBlockContextMenu.error ? <div className="composer-context-error" role="status">{codeBlockContextMenu.error}</div> : null}
+            </div>
+          ) : null}
         </div>
 
         <footer className="composer">

@@ -29,5 +29,8 @@ contextBridge.exposeInMainWorld("spitballDesktop", {
     saveConversation(conversation) {
       return ipcRenderer.invoke("spitball:storage:saveConversation", conversation);
     },
+    deleteConversation(id) {
+      return ipcRenderer.invoke("spitball:storage:deleteConversation", id);
+    },
   },
 });

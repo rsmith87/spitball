@@ -8,4 +8,5 @@ export function registerStorageIpc(ipcMain, storage) {
   ipcMain.handle("spitball:storage:deleteTaxonomyItem", (_event, id) => storage.deleteTaxonomyItem(id));
   ipcMain.handle("spitball:storage:listConversations", () => storage.listConversations());
   ipcMain.handle("spitball:storage:saveConversation", (_event, conversation) => storage.saveConversation(conversation));
+  ipcMain.handle("spitball:storage:deleteConversation", (_event, id) => storage.deleteConversation(id));
 }

@@ -22,6 +22,7 @@ export type Conversation = {
   model: string;
   requestType: string | null;
   threadId?: string;
+  taxonomyItemId?: string;
   messages: ChatMessage[];
   updatedAt: string;
 };

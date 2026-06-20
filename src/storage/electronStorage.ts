@@ -10,6 +10,7 @@ export type DesktopStorageApi = {
   deleteTaxonomyItem(id: string): Promise<void>;
   listConversations(): Promise<Conversation[]>;
   saveConversation(conversation: Conversation): Promise<IDBValidKey>;
+  deleteConversation(id: string): Promise<void>;
 };
 
 export function getDesktopStorageApi(): DesktopStorageApi | undefined {

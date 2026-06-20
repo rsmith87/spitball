@@ -106,6 +106,10 @@ export class SpitballDesktopStorage {
       .map(parseRecord);
   }
 
+  async deleteConversation(id) {
+    this.db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
+  }
+
   async saveTaxonomyItem(item) {
     this.db.prepare("INSERT OR REPLACE INTO taxonomy_items (id, data, updated_at) VALUES (?, ?, ?)").run(
       item.id,

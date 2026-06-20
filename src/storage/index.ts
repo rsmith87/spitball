@@ -22,6 +22,10 @@ export function listConversations(): Promise<Conversation[]> {
   return storage().listConversations();
 }
 
+export function deleteConversation(id: string): Promise<void> {
+  return storage().deleteConversation(id);
+}
+
 export function saveTaxonomyItem(item: TaxonomyItem): Promise<IDBValidKey> {
   return storage().saveTaxonomyItem(item);
 }

@@ -122,3 +122,24 @@ test("taxonomy items can be saved, listed, and deleted", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("conversations can be deleted", async () => {
+  const { dir, storage } = createStorage();
+  try {
+    await storage.saveConversation({
+      id: "chat-delete",
+      title: "Delete me",
+      model: "gemma",
+      requestType: "chat",
+      messages: [],
+      updatedAt: "2026-02-01T00:00:00.000Z",
+    });
+
+    await storage.deleteConversation("chat-delete");
+
+    assert.deepEqual(await storage.listConversations(), []);
+  } finally {
+    storage.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
