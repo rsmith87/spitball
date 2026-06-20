@@ -151,6 +151,7 @@ export type ChatProgressEvent = {
   label: string;
   toolName?: string;
   target?: string;
+  detail?: string;
 };
 
 export type ChatMessage = {

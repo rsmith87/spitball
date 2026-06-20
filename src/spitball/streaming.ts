@@ -2,6 +2,7 @@ import type { ChatProgressEvent, ChatTelemetry } from "./types";
 
 export type ChatStreamDelta = {
   content: string;
+  error?: string;
   threadId?: string;
   telemetry?: ChatTelemetry;
   progress?: ChatProgressEvent;
@@ -17,6 +18,10 @@ export function parseSseContent(chunk: string): ChatStreamDelta[] {
       const payload = JSON.parse(data);
       if (payload.type === "thread" && typeof payload.thread_id === "string") {
         values.push({ content: "", threadId: payload.thread_id });
+        continue;
+      }
+      if (payload.type === "error" && typeof payload.error === "string") {
+        values.push({ content: "", error: payload.error });
         continue;
       }
       const progress = progressFromPayload(payload);
@@ -76,12 +81,29 @@ function toolProgressId(payload: Record<string, unknown>, toolName: string, targ
   return `tool-${toolName}-${target || "call"}`;
 }
 
-function toolTarget(payload: Record<string, unknown>): { target?: string } {
+function toolTarget(payload: Record<string, unknown>): { target?: string; detail?: string } {
   const args = isRecord(payload.arguments) ? payload.arguments : {};
   const rawPath = typeof args.path === "string" ? args.path : typeof args.file === "string" ? args.file : "";
-  if (!rawPath) return {};
+  const detail = lineDetail(args);
+  if (!rawPath) return detail ? { detail } : {};
   const segments = rawPath.split(/[\\/]/).filter(Boolean);
-  return { target: segments[segments.length - 1] || rawPath };
+  return {
+    target: segments[segments.length - 1] || rawPath,
+    ...(detail ? { detail } : {}),
+  };
+}
+
+function lineDetail(args: Record<string, unknown>): string | undefined {
+  const start = lineNumber(args.start_line) ?? lineNumber(args.startLine) ?? lineNumber(args.line_start) ?? lineNumber(args.lineStart) ?? lineNumber(args.line);
+  const end = lineNumber(args.end_line) ?? lineNumber(args.endLine) ?? lineNumber(args.line_end) ?? lineNumber(args.lineEnd);
+  if (start == null && end == null) return undefined;
+  if (start != null && end != null && start !== end) return `L${start}-L${end}`;
+  return `L${start ?? end}`;
+}
+
+function lineNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) return null;
+  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

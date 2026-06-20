@@ -234,11 +234,11 @@ describe("App setup profile", () => {
     const input = await screen.findByLabelText("Agent tool max iterations");
     expect(input).toHaveProperty("value", "12");
     await user.clear(input);
-    await user.type(input, "12");
+    await user.type(input, "24");
     await user.click(screen.getByRole("button", { name: /test connection/i }));
 
     await waitFor(() => expect(saveProfile).toHaveBeenCalled());
-    expect(saveProfile.mock.calls[0][0]).toMatchObject({ agentToolMaxIterations: 12 });
+    expect(saveProfile.mock.calls[0][0]).toMatchObject({ agentToolMaxIterations: 24 });
   });
 
   it("keeps the selected model when testing the connection again", async () => {
@@ -727,6 +727,7 @@ describe("App setup profile", () => {
           label: "read_project_file",
           toolName: "read_project_file",
           target: "runner.py",
+          detail: "L40-L88",
         },
       });
       onToken({
@@ -738,6 +739,7 @@ describe("App setup profile", () => {
           label: "read_project_file",
           toolName: "read_project_file",
           target: "runner.py",
+          detail: "L40-L88",
         },
       });
       onToken({ content: "", progress: { id: "evt-3", type: "status", status: "running", label: "Reviewing generation" } });
@@ -757,6 +759,7 @@ describe("App setup profile", () => {
     expect(screen.queryByText("Generating")).toBeNull();
     expect(screen.getByText("read_project_file")).not.toBeNull();
     expect(screen.getByText("runner.py")).not.toBeNull();
+    expect(screen.getByText("L40-L88")).not.toBeNull();
     expect(screen.getByText("Reviewing generation")).not.toBeNull();
     expect(document.querySelector('.agent-progress-pill[data-status="running"]')?.textContent).not.toContain("Generated");
   });

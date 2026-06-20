@@ -90,18 +90,30 @@ export async function streamChat(
     const parts = buffer.split("\n\n");
     buffer = parts.pop() || "";
     for (const part of parts) {
-      for (const token of parseSseContent(part)) onToken(token);
+      for (const token of parseSseContent(part)) {
+        if (token.error) throw formatChatError(new Error(token.error), request);
+        onToken(token);
+      }
     }
   }
 }
 
 function formatChatError(error: unknown, request: ChatCompletionRequest): Error {
   const message = error instanceof Error ? error.message : "Chat failed";
-  if (request.tool_runtime !== "agent") return new Error(message);
   const detail = backendDetail(message);
+  if (isModelNotRunningDetail(detail)) {
+    return new Error(
+      `The selected model is not up: ${request.model}. Start or load it in Llama Pack, then try again. Backend detail: ${detail}`,
+    );
+  }
+  if (request.tool_runtime !== "agent") return new Error(message);
   const base =
     "Agent tools could not run: the selected agent has tools disabled or no tool catalog/profile configured. Enable agent tools on that node, then try again.";
   return new Error(detail ? `${base} Backend detail: ${detail}` : base);
+}
+
+function isModelNotRunningDetail(detail: string): boolean {
+  return detail.toLowerCase().includes("model is not running");
 }
 
 function backendDetail(message: string): string {

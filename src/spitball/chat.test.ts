@@ -247,12 +247,47 @@ describe("sendChat", () => {
     ]);
   });
 
+  it("explains stream errors when the selected model is not running", async () => {
+    const encoder = new TextEncoder();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: {"type":"error","error":"Model is not running locally on agent host: qwen"}\n\n'));
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        );
+      }),
+    );
+
+    await expect(
+      streamChat(
+        "http://controller.local",
+        { mode: "external_api_key", apiKey: "key" },
+        {
+          model: "qwen",
+          messages: [{ role: "user", content: "hello" }],
+          stream: true,
+          max_tokens: 1024,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(
+      "The selected model is not up: qwen. Start or load it in Llama Pack, then try again. Backend detail: Model is not running locally on agent host: qwen",
+    );
+  });
+
   it("parses agent tool progress events and final content", () => {
     const deltas = parseSseContent(
       [
         'data: {"type":"trace_event","id":"evt-1","event_type":"assistant_turn_started","status":"running","title":"Assistant turn 1","payload":{"iteration":1}}',
-        'data: {"type":"trace_event","id":"evt-2","tool_call_id":"call-1","event_type":"tool_call_started","status":"running","title":"read_project_file started","payload":{"tool_name":"read_project_file","arguments":{"path":"llama_pack/core/benchmarks/runner.py"}}}',
-        'data: {"type":"trace_event","id":"evt-3","tool_call_id":"call-1","event_type":"tool_call_completed","status":"passed","title":"read_project_file completed","payload":{"tool_name":"read_project_file","arguments":{"path":"llama_pack/core/benchmarks/runner.py"}}}',
+        'data: {"type":"trace_event","id":"evt-2","tool_call_id":"call-1","event_type":"tool_call_started","status":"running","title":"read_project_file started","payload":{"tool_name":"read_project_file","arguments":{"path":"llama_pack/core/benchmarks/runner.py","start_line":40,"end_line":88}}}',
+        'data: {"type":"trace_event","id":"evt-3","tool_call_id":"call-1","event_type":"tool_call_completed","status":"passed","title":"read_project_file completed","payload":{"tool_name":"read_project_file","arguments":{"path":"llama_pack/core/benchmarks/runner.py","start_line":40,"end_line":88}}}',
         'data: {"type":"trace_event","id":"evt-4","event_type":"answer_verification_failed","status":"failed","title":"Answer verification failed","payload":{"missing_paths":["src/fake.py"]}}',
         'data: {"type":"final","choices":[{"message":{"role":"assistant","content":"final answer"}}]}',
       ].join("\n\n"),
@@ -266,6 +301,7 @@ describe("sendChat", () => {
           id: "tool-call-1",
           label: "read_project_file",
           status: "running",
+          detail: "L40-L88",
           target: "runner.py",
           toolName: "read_project_file",
           type: "tool",
@@ -277,6 +313,7 @@ describe("sendChat", () => {
           id: "tool-call-1",
           label: "read_project_file",
           status: "passed",
+          detail: "L40-L88",
           target: "runner.py",
           toolName: "read_project_file",
           type: "tool",

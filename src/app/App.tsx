@@ -19,7 +19,7 @@ const DEFAULT_MESSAGE = "Ask a private model about the current project.";
 const DEFAULT_MAX_TOKENS = 1024;
 const DEFAULT_AGENT_TOOL_MAX_ITERATIONS = 12;
 const MAX_OUTPUT_TOKENS = 32768;
-const MAX_AGENT_TOOL_ITERATIONS = 16;
+const MAX_AGENT_TOOL_ITERATIONS = 32;
 type ConnectionStatus = "missing" | "loaded" | "checking" | "ready" | "failed";
 type ComposerContextMenu = {
   x: number;
@@ -111,6 +111,7 @@ function AgentProgress({ events }: { events: ChatProgressEvent[] }) {
           {event.status === "running" ? <Loader2 className="spin" size={13} /> : event.status === "failed" ? <XCircle size={13} /> : <CheckCircle2 size={13} />}
           <span>{event.label}</span>
           {event.target ? <small>{event.target}</small> : null}
+          {event.detail ? <small>{event.detail}</small> : null}
         </span>
       ))}
     </div>

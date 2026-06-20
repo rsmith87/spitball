@@ -23,4 +23,12 @@ describe("parseSseContent", () => {
 
     expect(parseSseContent(chunk)).toEqual([{ content: "", threadId: "thread-123" }, { content: "hi" }]);
   });
+
+  it("extracts Llama Pack stream error events", () => {
+    const chunk = 'data: {"type":"error","error":"Model is not running locally on agent host: qwen"}';
+
+    expect(parseSseContent(chunk)).toEqual([
+      { content: "", error: "Model is not running locally on agent host: qwen" },
+    ]);
+  });
 });
