@@ -7,11 +7,13 @@ export type ChatCompletionRequest = {
   messages: ChatMessage[];
   request_type?: string | null;
   stream: boolean;
+  thread_id?: string;
   tool_runtime?: "agent";
 };
 
 export type ChatCompletionResult = {
   content: string;
+  threadId?: string;
   telemetry?: ChatTelemetry;
 };
 
@@ -37,9 +39,9 @@ export async function getContextBudget(
 }
 
 export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCompletionRequest): Promise<ChatCompletionResult> {
-  let payload: { choices: Array<{ message: { content: string } }>; usage?: Record<string, unknown>; timings?: Record<string, unknown> };
+  let payload: { choices: Array<{ message: { content: string } }>; thread_id?: string; usage?: Record<string, unknown>; timings?: Record<string, unknown> };
   try {
-    payload = await requestJson<{ choices: Array<{ message: { content: string } }>; usage?: Record<string, unknown>; timings?: Record<string, unknown> }>(
+    payload = await requestJson<{ choices: Array<{ message: { content: string } }>; thread_id?: string; usage?: Record<string, unknown>; timings?: Record<string, unknown> }>(
       baseUrl,
       "/v1/chat/completions",
       { method: "POST", body: JSON.stringify(request) },
@@ -51,6 +53,7 @@ export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCo
   const telemetry = telemetryFromPayload(payload);
   return {
     content: payload.choices[0]?.message?.content || "",
+    ...(payload.thread_id ? { threadId: payload.thread_id } : {}),
     ...(telemetry ? { telemetry } : {}),
   };
 }

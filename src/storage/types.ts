@@ -19,6 +19,7 @@ export type Conversation = {
   title: string;
   model: string;
   requestType: string | null;
+  threadId?: string;
   messages: ChatMessage[];
   updatedAt: string;
 };

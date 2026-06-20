@@ -147,6 +147,7 @@ export type ChatTelemetry = {
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
+  pending?: boolean;
   startedAtMs?: number;
   firstTokenAtMs?: number;
   telemetry?: ChatTelemetry;

@@ -2,6 +2,7 @@ import type { ChatTelemetry } from "./types";
 
 export type ChatStreamDelta = {
   content: string;
+  threadId?: string;
   telemetry?: ChatTelemetry;
 };
 
@@ -13,6 +14,10 @@ export function parseSseContent(chunk: string): ChatStreamDelta[] {
     if (!data || data === "[DONE]") continue;
     try {
       const payload = JSON.parse(data);
+      if (payload.type === "thread" && typeof payload.thread_id === "string") {
+        values.push({ content: "", threadId: payload.thread_id });
+        continue;
+      }
       const telemetry = telemetryFromPayload(payload);
       let emitted = false;
       for (const choice of payload.choices || []) {

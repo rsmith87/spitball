@@ -289,49 +289,62 @@ export function App() {
     };
     setDraft("");
     setActiveId(pending.id);
-    setConversations((items) => upsertConversation(items, pending));
     setIsSending(true);
+    const startedAtMs = performance.now();
+    const waiting = withAssistantMessage(pending, {
+      role: "assistant",
+      content: "",
+      pending: true,
+      startedAtMs,
+    });
+    setConversations((items) => upsertConversation(items, waiting));
     try {
       let assistant = "";
-      const startedAtMs = performance.now();
+      let threadId = pending.threadId;
       let firstTokenAtMs: number | undefined;
       let streamTelemetry: ChatTelemetry | undefined;
       const toolRuntime = agentToolsEnabled ? "agent" : undefined;
-      if (model?.metadata.capabilities.streaming && !agentToolsEnabled) {
+      if (!agentToolsEnabled) {
         await streamChat(
           backendUrl,
           auth,
-          { model: selectedModel, request_type: requestType, stream: true, messages: pending.messages, tool_runtime: toolRuntime },
+          { model: selectedModel, request_type: requestType, stream: true, thread_id: threadId, messages: pending.messages, tool_runtime: toolRuntime },
           (delta) => {
+            if (delta.threadId) threadId = delta.threadId;
+            if (!delta.content && !delta.telemetry) {
+              setConversations((items) => upsertConversation(items, { ...waiting, threadId }));
+              return;
+            }
             assistant += delta.content;
             if (!firstTokenAtMs && delta.content) firstTokenAtMs = performance.now();
             streamTelemetry = mergeTelemetry(streamTelemetry, delta.telemetry);
-            const streamingMessage = finalizeAssistantMessage({
+            const streamingMessage: ChatMessage = {
               role: "assistant",
               content: assistant,
+              pending: true,
               startedAtMs,
               firstTokenAtMs,
               telemetry: streamTelemetry,
-            });
-            const streamingConversation = withAssistantMessage(pending, streamingMessage);
+            };
+            const streamingConversation = withAssistantMessage({ ...pending, threadId }, streamingMessage);
             setConversations((items) => upsertConversation(items, streamingConversation));
           },
         );
       } else {
-        const result = await sendChat(backendUrl, auth, { model: selectedModel, request_type: requestType, stream: false, messages: pending.messages, tool_runtime: toolRuntime });
+        const result = await sendChat(backendUrl, auth, { model: selectedModel, request_type: requestType, stream: false, thread_id: threadId, messages: pending.messages, tool_runtime: toolRuntime });
         assistant = result.content;
-        const saved = withAssistantMessage(pending, finalizeAssistantMessage({
+        threadId = result.threadId || threadId;
+        const saved = withAssistantMessage({ ...pending, threadId }, finalizeAssistantMessage({
           role: "assistant",
           content: assistant || "(empty response)",
           startedAtMs,
-          firstTokenAtMs: performance.now(),
           telemetry: result.telemetry,
         }));
         await saveConversation(saved);
         setConversations((items) => upsertConversation(items, saved));
         return;
       }
-        const saved = withAssistantMessage(pending, finalizeAssistantMessage({
+        const saved = withAssistantMessage({ ...pending, threadId }, finalizeAssistantMessage({
           role: "assistant",
           content: assistant || "(empty response)",
           startedAtMs,
@@ -526,7 +539,18 @@ export function App() {
                   {telemetryChips(message).map((chip) => <span className="message-chip" key={chip}>{chip}</span>)}
                 </div>
               ) : null}
-              <p>{message.content}</p>
+              {message.pending && !message.content ? (
+                <div className="message-pending" data-testid="spitball-assistant-pending">
+                  <span>Agent is responding</span>
+                  <span className="typing-dots" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                </div>
+              ) : (
+                <p>{message.content}</p>
+              )}
             </article>
           ))}
         </div>
@@ -691,13 +715,14 @@ function finalizeAssistantMessage(message: ChatMessage): ChatMessage {
   const nowMs = performance.now();
   const start = message.startedAtMs || nowMs;
   const totalMs = nowMs - start;
-  const ttftMs = message.firstTokenAtMs ? message.firstTokenAtMs - start : message.content ? totalMs : undefined;
+  const ttftMs = message.firstTokenAtMs ? message.firstTokenAtMs - start : undefined;
   const telemetry = mergeTelemetry(message.telemetry, {
     ...(ttftMs != null ? { ttftMs } : {}),
     totalMs,
   });
   return {
     ...message,
+    pending: false,
     telemetry,
   };
 }

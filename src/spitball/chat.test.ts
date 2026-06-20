@@ -87,6 +87,7 @@ describe("sendChat", () => {
         return new Response(
           JSON.stringify({
             choices: [{ message: { content: "assistant ok" } }],
+            thread_id: "thread-123",
             usage: { prompt_tokens: 21, completion_tokens: 7 },
             timings: { prompt_ms: 35, predicted_ms: 700, predicted_n: 7 },
           }),
@@ -107,6 +108,7 @@ describe("sendChat", () => {
 
     expect(result).toEqual({
       content: "assistant ok",
+      threadId: "thread-123",
       telemetry: {
         promptTokens: 21,
         completionTokens: 7,
@@ -125,6 +127,7 @@ describe("sendChat", () => {
         return new Response(
           new ReadableStream({
             start(controller) {
+              controller.enqueue(encoder.encode('data: {"type":"thread","thread_id":"thread-stream"}\n\n'));
               controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'));
               controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":" there"}}],"usage":{"prompt_tokens":8,"completion_tokens":2},"timings":{"predicted_ms":250,"predicted_n":2}}\n\n'));
               controller.enqueue(encoder.encode("data: [DONE]\n\n"));
@@ -149,6 +152,7 @@ describe("sendChat", () => {
     );
 
     expect(deltas).toEqual([
+      { content: "", threadId: "thread-stream" },
       { content: "hi" },
       {
         content: " there",

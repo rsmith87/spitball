@@ -120,7 +120,9 @@ vi.mock("../spitball/chat", () => ({
     warnings: [],
   })),
   sendChat: vi.fn(async () => ({ content: "assistant ok" })),
-  streamChat: vi.fn(),
+  streamChat: vi.fn(async (_baseUrl, _auth, _request, onToken) => {
+    onToken({ content: "assistant ok" });
+  }),
 }));
 
 describe("App setup profile", () => {
@@ -133,6 +135,9 @@ describe("App setup profile", () => {
     saveProject.mockClear();
     vi.mocked(sendChat).mockClear();
     vi.mocked(streamChat).mockClear();
+    vi.mocked(streamChat).mockImplementation(async (_baseUrl, _auth, _request, onToken) => {
+      onToken({ content: "assistant ok" });
+    });
     vi.mocked(getContextBudget).mockClear();
     vi.mocked(runChatDiagnostics).mockClear();
   });
@@ -223,6 +228,65 @@ describe("App setup profile", () => {
     await user.keyboard("{Enter}");
 
     await waitFor(() => expect(screen.getByText("assistant ok")).not.toBeNull());
+  });
+
+  it("streams regular chat requests", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "stream this");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalled());
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(vi.mocked(streamChat).mock.calls[0][2]).toMatchObject({ stream: true });
+  });
+
+  it("sends the Llama Pack thread id on later turns", async () => {
+    const user = userEvent.setup();
+    vi.mocked(streamChat)
+      .mockImplementationOnce(async (_baseUrl, _auth, _request, onToken) => {
+        onToken({ content: "", threadId: "thread-abc" });
+        onToken({ content: "first reply" });
+      })
+      .mockImplementationOnce(async (_baseUrl, _auth, _request, onToken) => {
+        onToken({ content: "second reply" });
+      });
+    render(<App />);
+
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "first");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByText("first reply")).not.toBeNull());
+
+    await user.clear(composer);
+    await user.type(composer, "continue");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2));
+
+    expect(vi.mocked(streamChat).mock.calls[1][2]).toMatchObject({ thread_id: "thread-abc" });
+  });
+
+  it("shows a pending assistant indicator before the first streamed token", async () => {
+    let finishStream: (() => void) | undefined;
+    vi.mocked(streamChat).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        finishStream = resolve;
+      });
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "take your time");
+    await user.keyboard("{Enter}");
+
+    expect(await screen.findByTestId("spitball-assistant-pending")).not.toBeNull();
+    finishStream?.();
   });
 
   it("shows analytics chips for assistant responses", async () => {
