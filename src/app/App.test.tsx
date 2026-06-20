@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { getContextBudget, sendChat, streamChat } from "../spitball/chat";
 import { runChatDiagnostics } from "../spitball/diagnostics";
 import { getProfile } from "../storage";
-import type { Conversation } from "../storage/types";
+import type { Conversation, TaxonomyItem } from "../storage/types";
 
 const savedProfile = {
   id: "default",
@@ -21,7 +21,10 @@ const savedProfile = {
 
 const saveProfile = vi.fn();
 const saveProject = vi.fn();
+const saveTaxonomyItem = vi.fn();
+const deleteTaxonomyItem = vi.fn();
 let storedConversations: Conversation[] = [];
+let storedTaxonomyItems: TaxonomyItem[] = [];
 const storedProjects = [
   {
     id: "project-llama-pack",
@@ -36,9 +39,12 @@ vi.mock("../storage", () => ({
   getProfile: vi.fn(async () => savedProfile),
   listConversations: vi.fn(async () => storedConversations),
   listProjects: vi.fn(async () => storedProjects),
+  listTaxonomyItems: vi.fn(async () => storedTaxonomyItems),
   saveConversation: vi.fn(async () => "chat-1"),
   saveProfile: (...args: unknown[]) => saveProfile(...args),
   saveProject: (...args: unknown[]) => saveProject(...args),
+  saveTaxonomyItem: (...args: unknown[]) => saveTaxonomyItem(...args),
+  deleteTaxonomyItem: (...args: unknown[]) => deleteTaxonomyItem(...args),
 }));
 
 vi.mock("../spitball/discovery", () => ({
@@ -135,7 +141,10 @@ describe("App setup profile", () => {
   beforeEach(() => {
     saveProfile.mockClear();
     saveProject.mockClear();
+    saveTaxonomyItem.mockClear();
+    deleteTaxonomyItem.mockClear();
     storedConversations = [];
+    storedTaxonomyItems = [];
     vi.mocked(sendChat).mockClear();
     vi.mocked(streamChat).mockClear();
     vi.mocked(streamChat).mockImplementation(async (_baseUrl, _auth, _request, onToken) => {
@@ -305,6 +314,40 @@ describe("App setup profile", () => {
     expect(screen.queryByText("old prompt")).toBeNull();
   });
 
+  it("adds, edits, and deletes chat buckets in the taxonomy manager", async () => {
+    storedTaxonomyItems = [
+      {
+        id: "bucket-work",
+        name: "Work",
+        createdAt: "2026-06-18T10:00:00.000Z",
+        updatedAt: "2026-06-18T10:00:00.000Z",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+
+    const bucketName = await screen.findByLabelText("Bucket name");
+    await user.type(bucketName, "Research");
+    await user.click(screen.getByRole("button", { name: "Add bucket" }));
+
+    expect(saveTaxonomyItem).toHaveBeenCalledWith(expect.objectContaining({ name: "Research" }));
+    expect(await screen.findByText("Research")).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Edit Work" }));
+    const editingName = screen.getByLabelText("Editing bucket name");
+    await user.clear(editingName);
+    await user.type(editingName, "Client work");
+    await user.click(screen.getByRole("button", { name: "Save bucket" }));
+
+    expect(saveTaxonomyItem).toHaveBeenCalledWith(expect.objectContaining({ id: "bucket-work", name: "Client work" }));
+    expect(await screen.findByText("Client work")).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Delete Client work" }));
+
+    expect(deleteTaxonomyItem).toHaveBeenCalledWith("bucket-work");
+    expect(screen.queryByText("Client work")).toBeNull();
+  });
+
   it("sends with Enter and keeps Shift Enter as a newline", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -319,6 +362,36 @@ describe("App setup profile", () => {
     await user.keyboard("{Enter}");
 
     await waitFor(() => expect(screen.getByText("assistant ok")).not.toBeNull());
+  });
+
+  it("shows clipboard actions from the composer right click menu", async () => {
+    const user = userEvent.setup();
+    const clipboard = {
+      readText: vi.fn(async () => " pasted"),
+      writeText: vi.fn(async () => undefined),
+    };
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: clipboard,
+    });
+    render(<App />);
+
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend") as HTMLTextAreaElement;
+    await user.clear(composer);
+    await user.type(composer, "copy me");
+    composer.setSelectionRange(0, 4);
+    fireEvent.contextMenu(composer, { clientX: 24, clientY: 48 });
+
+    expect(screen.getByRole("menu", { name: "Composer context menu" })).not.toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Copy" }));
+    expect(clipboard.writeText).toHaveBeenCalledWith("copy");
+
+    composer.setSelectionRange(composer.value.length, composer.value.length);
+    fireEvent.contextMenu(composer, { clientX: 24, clientY: 48 });
+    await user.click(screen.getByRole("menuitem", { name: "Paste" }));
+
+    expect(composer.value).toBe("copy me pasted");
+    expect(clipboard.readText).toHaveBeenCalled();
   });
 
   it("streams regular chat requests", async () => {

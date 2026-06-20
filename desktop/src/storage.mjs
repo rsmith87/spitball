@@ -38,6 +38,11 @@ export class SpitballDesktopStorage {
         data TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS taxonomy_items (
+        id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
     `);
   }
 
@@ -99,5 +104,25 @@ export class SpitballDesktopStorage {
       .prepare("SELECT data FROM conversations ORDER BY updated_at DESC")
       .all()
       .map(parseRecord);
+  }
+
+  async saveTaxonomyItem(item) {
+    this.db.prepare("INSERT OR REPLACE INTO taxonomy_items (id, data, updated_at) VALUES (?, ?, ?)").run(
+      item.id,
+      JSON.stringify(item),
+      item.updatedAt,
+    );
+    return item.id;
+  }
+
+  async listTaxonomyItems() {
+    return this.db
+      .prepare("SELECT data FROM taxonomy_items ORDER BY updated_at DESC")
+      .all()
+      .map(parseRecord);
+  }
+
+  async deleteTaxonomyItem(id) {
+    this.db.prepare("DELETE FROM taxonomy_items WHERE id = ?").run(id);
   }
 }

@@ -1,7 +1,7 @@
-import type { ConnectionProfile, Conversation, Project } from "./types";
+import type { ConnectionProfile, Conversation, Project, TaxonomyItem } from "./types";
 
 const DB_NAME = "spitball";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -10,6 +10,7 @@ function openDb(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains("profiles")) db.createObjectStore("profiles", { keyPath: "id" });
       if (!db.objectStoreNames.contains("conversations")) db.createObjectStore("conversations", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("taxonomyItems")) db.createObjectStore("taxonomyItems", { keyPath: "id" });
       if (!db.objectStoreNames.contains("projects")) db.createObjectStore("projects", { keyPath: "id" });
     };
     request.onerror = () => reject(request.error);
@@ -44,6 +45,20 @@ export function listConversations(): Promise<Conversation[]> {
   return tx("conversations", "readonly", (store) => store.getAll()).then((items) =>
     items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
   );
+}
+
+export function saveTaxonomyItem(item: TaxonomyItem): Promise<IDBValidKey> {
+  return tx("taxonomyItems", "readwrite", (store) => store.put(item));
+}
+
+export function listTaxonomyItems(): Promise<TaxonomyItem[]> {
+  return tx("taxonomyItems", "readonly", (store) => store.getAll()).then((items) =>
+    items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+  );
+}
+
+export function deleteTaxonomyItem(id: string): Promise<void> {
+  return tx("taxonomyItems", "readwrite", (store) => store.delete(id));
 }
 
 export function saveProject(project: Project): Promise<IDBValidKey> {

@@ -95,3 +95,30 @@ test("projects and conversations are listed by updated time", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("taxonomy items can be saved, listed, and deleted", async () => {
+  const { dir, storage } = createStorage();
+  try {
+    await storage.saveTaxonomyItem({
+      id: "bucket-old",
+      name: "Old",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    await storage.saveTaxonomyItem({
+      id: "bucket-new",
+      name: "New",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-02-01T00:00:00.000Z",
+    });
+
+    assert.deepEqual((await storage.listTaxonomyItems()).map((item) => item.id), ["bucket-new", "bucket-old"]);
+
+    await storage.deleteTaxonomyItem("bucket-new");
+
+    assert.deepEqual((await storage.listTaxonomyItems()).map((item) => item.id), ["bucket-old"]);
+  } finally {
+    storage.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

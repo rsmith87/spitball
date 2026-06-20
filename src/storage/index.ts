@@ -1,6 +1,6 @@
 import { getDesktopStorageApi } from "./electronStorage";
 import * as indexedDbStorage from "./indexedDbStorage";
-import type { ConnectionProfile, Conversation, Project } from "./types";
+import type { ConnectionProfile, Conversation, Project, TaxonomyItem } from "./types";
 
 function storage() {
   return getDesktopStorageApi() || indexedDbStorage;
@@ -20,6 +20,18 @@ export function saveConversation(conversation: Conversation): Promise<IDBValidKe
 
 export function listConversations(): Promise<Conversation[]> {
   return storage().listConversations();
+}
+
+export function saveTaxonomyItem(item: TaxonomyItem): Promise<IDBValidKey> {
+  return storage().saveTaxonomyItem(item);
+}
+
+export function listTaxonomyItems(): Promise<TaxonomyItem[]> {
+  return storage().listTaxonomyItems();
+}
+
+export function deleteTaxonomyItem(id: string): Promise<void> {
+  return storage().deleteTaxonomyItem(id);
 }
 
 export function saveProject(project: Project): Promise<IDBValidKey> {

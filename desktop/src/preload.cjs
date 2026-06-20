@@ -14,6 +14,15 @@ contextBridge.exposeInMainWorld("spitballDesktop", {
     saveProject(project) {
       return ipcRenderer.invoke("spitball:storage:saveProject", project);
     },
+    listTaxonomyItems() {
+      return ipcRenderer.invoke("spitball:storage:listTaxonomyItems");
+    },
+    saveTaxonomyItem(item) {
+      return ipcRenderer.invoke("spitball:storage:saveTaxonomyItem", item);
+    },
+    deleteTaxonomyItem(id) {
+      return ipcRenderer.invoke("spitball:storage:deleteTaxonomyItem", id);
+    },
     listConversations() {
       return ipcRenderer.invoke("spitball:storage:listConversations");
     },

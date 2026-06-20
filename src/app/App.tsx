@@ -1,6 +1,6 @@
-import { CheckCircle2, Database, Download, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, PlugZap, Send, Settings, ShieldCheck, Sun, XCircle } from "lucide-react";
+import { CheckCircle2, ClipboardPaste, Copy, Database, Download, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, Pencil, PlugZap, Scissors, Send, Settings, ShieldCheck, Sun, Tags, TextSelect, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getClientDiscovery } from "../spitball/discovery";
@@ -10,8 +10,8 @@ import { getContextBudget, streamChat } from "../spitball/chat";
 import { createBackendProject, listBackendProjects } from "../spitball/projects";
 import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
-import { getProfile, listConversations, listProjects, saveConversation, saveProfile, saveProject } from "../storage";
-import type { ConnectionProfile, Conversation, Project } from "../storage/types";
+import { deleteTaxonomyItem, getProfile, listConversations, listProjects, listTaxonomyItems, saveConversation, saveProfile, saveProject, saveTaxonomyItem } from "../storage";
+import type { ConnectionProfile, Conversation, Project, TaxonomyItem } from "../storage/types";
 import spitballLogo from "../styles/spitball-logo.png";
 
 const DEFAULT_MESSAGE = "Ask a private model about the current project.";
@@ -20,6 +20,13 @@ const DEFAULT_AGENT_TOOL_MAX_ITERATIONS = 12;
 const MAX_OUTPUT_TOKENS = 32768;
 const MAX_AGENT_TOOL_ITERATIONS = 16;
 type ConnectionStatus = "missing" | "loaded" | "checking" | "ready" | "failed";
+type ComposerContextMenu = {
+  x: number;
+  y: number;
+  selectionStart: number;
+  selectionEnd: number;
+  error: string;
+};
 
 function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -95,6 +102,26 @@ function connectionStatusLabel(status: ConnectionStatus): string {
   return "Connection not configured";
 }
 
+function contextMenuPosition(clientX: number, clientY: number): { x: number; y: number } {
+  const menuWidth = 184;
+  const menuHeight = 188;
+  return {
+    x: Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8)),
+    y: Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8)),
+  };
+}
+
+function selectedText(value: string, selectionStart: number, selectionEnd: number): string {
+  return value.slice(selectionStart, selectionEnd);
+}
+
+function requireClipboard(action: string): Clipboard {
+  if (!navigator.clipboard) {
+    throw new Error(`Cannot ${action}: clipboard access is unavailable in this browser.`);
+  }
+  return navigator.clipboard;
+}
+
 export function App() {
   const [backendUrl, setBackendUrl] = useState("http://mac-mini.local");
   const [apiKey, setApiKey] = useState("");
@@ -116,15 +143,21 @@ export function App() {
   const [contextBudgetError, setContextBudgetError] = useState("");
   const [isChecking, setIsChecking] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [taxonomyItems, setTaxonomyItems] = useState<TaxonomyItem[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [taxonomyExpanded, setTaxonomyExpanded] = useState(true);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [bucketName, setBucketName] = useState("");
+  const [editingTaxonomyItemId, setEditingTaxonomyItemId] = useState("");
+  const [editingBucketName, setEditingBucketName] = useState("");
   const [projectName, setProjectName] = useState("");
   const [projectRoot, setProjectRoot] = useState("");
   const [activeId, setActiveId] = useState("");
   const [activeView, setActiveView] = useState<"chat" | "settings">("chat");
   const [draft, setDraft] = useState(DEFAULT_MESSAGE);
   const [isSending, setIsSending] = useState(false);
+  const [composerContextMenu, setComposerContextMenu] = useState<ComposerContextMenu | null>(null);
   const [darkMode, setDarkMode] = useState(() => {
     try {
       return localStorage.getItem("spitball-theme") === "dark";
@@ -133,6 +166,7 @@ export function App() {
     }
   });
   const messagesRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark-mode", darkMode);
@@ -158,6 +192,9 @@ export function App() {
     void listProjects().then((items) => {
       setProjects(items);
       if (items[0]) setSelectedProjectId(items[0].id);
+    });
+    void listTaxonomyItems().then((items) => {
+      setTaxonomyItems(items);
     });
     void getProfile("default").then((profile) => {
       if (!profile) return;
@@ -185,6 +222,24 @@ export function App() {
     if (!container) return;
     container.scrollTop = container.scrollHeight;
   }, [activeConversation?.messages, isSending]);
+
+  useEffect(() => {
+    if (!composerContextMenu) return;
+    function closeOnWindowClick() {
+      setComposerContextMenu(null);
+    }
+    function closeOnEscape(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") setComposerContextMenu(null);
+    }
+    window.addEventListener("click", closeOnWindowClick);
+    window.addEventListener("scroll", closeOnWindowClick, true);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("click", closeOnWindowClick);
+      window.removeEventListener("scroll", closeOnWindowClick, true);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [composerContextMenu]);
 
   useEffect(() => {
     if (connectionStatus !== "ready" || !auth || !selectedModel || isSending || !draft.trim()) {
@@ -216,6 +271,90 @@ export function App() {
     if (connectionStatus !== "missing") setConnectionStatus("loaded");
     setSetupError("");
     setDiagnostic(null);
+  }
+
+  function focusComposerSelection(selectionStart: number, selectionEnd: number) {
+    window.requestAnimationFrame(() => {
+      const textarea = composerRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(selectionStart, selectionEnd);
+    });
+  }
+
+  function replaceDraftSelection(replacement: string) {
+    const textarea = composerRef.current;
+    if (!textarea) throw new Error("Cannot edit composer text: textarea is unavailable.");
+    const selectionStart = textarea.selectionStart;
+    const selectionEnd = textarea.selectionEnd;
+    const nextDraft = `${draft.slice(0, selectionStart)}${replacement}${draft.slice(selectionEnd)}`;
+    const nextCaret = selectionStart + replacement.length;
+    setDraft(nextDraft);
+    focusComposerSelection(nextCaret, nextCaret);
+  }
+
+  function openComposerContextMenu(event: ReactMouseEvent<HTMLTextAreaElement>) {
+    event.preventDefault();
+    const textarea = event.currentTarget;
+    const position = contextMenuPosition(event.clientX, event.clientY);
+    setComposerContextMenu({
+      x: position.x,
+      y: position.y,
+      selectionStart: textarea.selectionStart,
+      selectionEnd: textarea.selectionEnd,
+      error: "",
+    });
+  }
+
+  function closeComposerContextMenu() {
+    setComposerContextMenu(null);
+  }
+
+  function setComposerContextMenuError(error: unknown) {
+    const message = error instanceof Error ? error.message : "Clipboard action failed.";
+    setComposerContextMenu((current) => current ? { ...current, error: message } : current);
+  }
+
+  async function copyComposerSelection() {
+    try {
+      if (!composerContextMenu) throw new Error("Cannot copy: no composer selection is active.");
+      const text = selectedText(draft, composerContextMenu.selectionStart, composerContextMenu.selectionEnd);
+      if (!text) throw new Error("Cannot copy: select text in the composer first.");
+      await requireClipboard("copy").writeText(text);
+      closeComposerContextMenu();
+    } catch (error) {
+      setComposerContextMenuError(error);
+    }
+  }
+
+  async function cutComposerSelection() {
+    try {
+      if (!composerContextMenu) throw new Error("Cannot cut: no composer selection is active.");
+      const text = selectedText(draft, composerContextMenu.selectionStart, composerContextMenu.selectionEnd);
+      if (!text) throw new Error("Cannot cut: select text in the composer first.");
+      await requireClipboard("cut").writeText(text);
+      const nextDraft = `${draft.slice(0, composerContextMenu.selectionStart)}${draft.slice(composerContextMenu.selectionEnd)}`;
+      setDraft(nextDraft);
+      focusComposerSelection(composerContextMenu.selectionStart, composerContextMenu.selectionStart);
+      closeComposerContextMenu();
+    } catch (error) {
+      setComposerContextMenuError(error);
+    }
+  }
+
+  async function pasteIntoComposer() {
+    try {
+      const text = await requireClipboard("paste").readText();
+      replaceDraftSelection(text);
+      closeComposerContextMenu();
+    } catch (error) {
+      setComposerContextMenuError(error);
+    }
+  }
+
+  function selectAllComposerText() {
+    setComposerContextMenu(null);
+    focusComposerSelection(0, draft.length);
   }
 
   async function runSetup() {
@@ -301,6 +440,51 @@ export function App() {
     setProjectsExpanded(false);
     setProjectName("");
     setProjectRoot("");
+  }
+
+  async function addTaxonomyItem() {
+    const name = bucketName.trim();
+    if (!name) return;
+    const now = new Date().toISOString();
+    const item: TaxonomyItem = {
+      id: newId("bucket"),
+      name,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await saveTaxonomyItem(item);
+    setTaxonomyItems((items) => upsertTaxonomyItem(items, item));
+    setBucketName("");
+  }
+
+  function startEditingTaxonomyItem(item: TaxonomyItem) {
+    setEditingTaxonomyItemId(item.id);
+    setEditingBucketName(item.name);
+  }
+
+  function cancelEditingTaxonomyItem() {
+    setEditingTaxonomyItemId("");
+    setEditingBucketName("");
+  }
+
+  async function saveEditingTaxonomyItem() {
+    const item = taxonomyItems.find((current) => current.id === editingTaxonomyItemId);
+    const name = editingBucketName.trim();
+    if (!item || !name) return;
+    const updated: TaxonomyItem = {
+      ...item,
+      name,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveTaxonomyItem(updated);
+    setTaxonomyItems((items) => upsertTaxonomyItem(items, updated));
+    cancelEditingTaxonomyItem();
+  }
+
+  async function removeTaxonomyItem(id: string) {
+    await deleteTaxonomyItem(id);
+    setTaxonomyItems((items) => items.filter((item) => item.id !== id));
+    if (editingTaxonomyItemId === id) cancelEditingTaxonomyItem();
   }
 
   async function refreshBackendProjects(currentBackendUrl: string, currentAuth: AuthState) {
@@ -457,6 +641,70 @@ export function App() {
               </button>
             ))}
           </div>
+        </section>
+
+        <section className="context-box taxonomy-box">
+          <button
+            className="context-heading project-toggle"
+            type="button"
+            aria-expanded={taxonomyExpanded}
+            onClick={() => setTaxonomyExpanded((value) => !value)}
+          >
+            <Tags size={16} />
+            <span>Buckets</span>
+            <span className={`collapse-chevron ${taxonomyExpanded ? "open" : ""}`} aria-hidden="true" />
+          </button>
+          {taxonomyExpanded ? (
+            <>
+              <label>
+                Bucket name
+                <input value={bucketName} onChange={(event) => setBucketName(event.target.value)} placeholder="Research" />
+              </label>
+              <button
+                className="secondary"
+                type="button"
+                disabled={!bucketName.trim()}
+                onClick={() => void addTaxonomyItem()}
+              >
+                <Tags size={16} /> Add bucket
+              </button>
+              <div className="taxonomy-list">
+                {taxonomyItems.length === 0 ? <p className="empty">No buckets saved yet.</p> : null}
+                {taxonomyItems.map((item) => (
+                  <div className="taxonomy-row" key={item.id}>
+                    {editingTaxonomyItemId === item.id ? (
+                      <>
+                        <label className="taxonomy-edit-label">
+                          Editing bucket name
+                          <input value={editingBucketName} onChange={(event) => setEditingBucketName(event.target.value)} />
+                        </label>
+                        <div className="taxonomy-actions">
+                          <button type="button" aria-label="Save bucket" onClick={() => void saveEditingTaxonomyItem()} disabled={!editingBucketName.trim()}>
+                            <CheckCircle2 size={15} />
+                          </button>
+                          <button type="button" aria-label="Cancel editing bucket" onClick={cancelEditingTaxonomyItem}>
+                            <XCircle size={15} />
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <span>{item.name}</span>
+                        <div className="taxonomy-actions">
+                          <button type="button" aria-label={`Edit ${item.name}`} onClick={() => startEditingTaxonomyItem(item)}>
+                            <Pencil size={15} />
+                          </button>
+                          <button type="button" aria-label={`Delete ${item.name}`} onClick={() => void removeTaxonomyItem(item.id)}>
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
         </section>
 
         <div className="sidebar-footer">
@@ -624,11 +872,37 @@ export function App() {
             <div className="context-budget error" data-testid="spitball-context-budget">{contextBudgetError}</div>
           ) : null}
           <textarea
+            ref={composerRef}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
+            onContextMenu={openComposerContextMenu}
             onKeyDown={handleComposerKeyDown}
             placeholder="Send a message to your private backend"
           />
+          {composerContextMenu ? (
+            <div
+              aria-label="Composer context menu"
+              className="composer-context-menu"
+              role="menu"
+              style={{ left: composerContextMenu.x, top: composerContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.preventDefault()}
+            >
+              <button type="button" role="menuitem" onClick={() => void cutComposerSelection()} disabled={composerContextMenu.selectionStart === composerContextMenu.selectionEnd}>
+                <Scissors size={15} /> Cut
+              </button>
+              <button type="button" role="menuitem" onClick={() => void copyComposerSelection()} disabled={composerContextMenu.selectionStart === composerContextMenu.selectionEnd}>
+                <Copy size={15} /> Copy
+              </button>
+              <button type="button" role="menuitem" onClick={() => void pasteIntoComposer()}>
+                <ClipboardPaste size={15} /> Paste
+              </button>
+              <button type="button" role="menuitem" onClick={selectAllComposerText} disabled={!draft}>
+                <TextSelect size={15} /> Select all
+              </button>
+              {composerContextMenu.error ? <div className="composer-context-error" role="status">{composerContextMenu.error}</div> : null}
+            </div>
+          ) : null}
           <button onClick={() => void sendMessage()} disabled={!auth || !selectedModel || isSending}>
             {isSending ? <Loader2 className="spin" size={17} /> : <Send size={17} />} Send
           </button>
@@ -781,6 +1055,11 @@ function upsertConversation(items: Conversation[], conversation: Conversation): 
 function mergeProjects(primary: Project[], fallback: Project[]): Project[] {
   const seen = new Set(primary.map((item) => item.id));
   return [...primary, ...fallback.filter((item) => !seen.has(item.id))].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+function upsertTaxonomyItem(items: TaxonomyItem[], item: TaxonomyItem): TaxonomyItem[] {
+  const next = [item, ...items.filter((current) => current.id !== item.id)];
+  return next.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 function withAssistantMessage(conversation: Conversation, message: ChatMessage): Conversation {
