@@ -920,6 +920,48 @@ describe("App setup profile", () => {
     expect(document.querySelector('.agent-progress-pill[data-status="running"]')?.textContent).not.toContain("Generated");
   });
 
+  it("renders verification warnings and issue details for streamed assistant answers", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(async (_baseUrl, _auth, _request, onToken) => {
+      onToken({
+        content: "",
+        progress: {
+          id: "answer-reviewing",
+          type: "status",
+          status: "failed",
+          label: "Needs verification",
+          verification: {
+            status: "failed",
+            issues: [
+              {
+                kind: "missing_path",
+                value: "src/fake.py",
+                start: 5,
+                end: 16,
+                excerpt: "`src/fake.py`",
+                severity: "failed",
+              },
+            ],
+          },
+        },
+      });
+      onToken({ content: "Use `src/fake.py`." });
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText("Agent tools"));
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "verify this");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getAllByText("Needs verification").length).toBeGreaterThan(0));
+    expect(screen.getByText("Unverified claim")).not.toBeNull();
+    expect(screen.getByText("Path not found in project graph")).not.toBeNull();
+    expect(screen.getAllByText("src/fake.py").length).toBeGreaterThan(0);
+    expect(document.querySelector(".verification-inline-issue")?.textContent).toBe("src/fake.py");
+  });
+
   it("opens setup controls from the Settings sidebar item", async () => {
     const user = userEvent.setup();
     render(<App />);

@@ -439,7 +439,7 @@ describe("sendChat", () => {
         'data: {"type":"trace_event","id":"evt-1","event_type":"assistant_turn_started","status":"running","title":"Assistant turn 1","payload":{"iteration":1}}',
         'data: {"type":"trace_event","id":"evt-2","tool_call_id":"call-1","event_type":"tool_call_started","status":"running","title":"read_project_file started","payload":{"tool_name":"read_project_file","arguments":{"path":"llama_pack/core/benchmarks/runner.py","start_line":40,"end_line":88}}}',
         'data: {"type":"trace_event","id":"evt-3","tool_call_id":"call-1","event_type":"tool_call_completed","status":"passed","title":"read_project_file completed","payload":{"tool_name":"read_project_file","arguments":{"path":"llama_pack/core/benchmarks/runner.py","start_line":40,"end_line":88}}}',
-        'data: {"type":"trace_event","id":"evt-4","event_type":"answer_verification_failed","status":"failed","title":"Answer verification failed","payload":{"missing_paths":["src/fake.py"]}}',
+        'data: {"type":"trace_event","id":"evt-4","event_type":"answer_verification_failed","status":"failed","title":"Answer verification failed","payload":{"missing_paths":["src/fake.py"],"issues":[{"kind":"missing_path","value":"src/fake.py","start":5,"end":16,"excerpt":"`src/fake.py`","severity":"failed"}]}}',
         'data: {"type":"final","choices":[{"message":{"role":"assistant","content":"final answer"}}]}',
       ].join("\n\n"),
     );
@@ -470,7 +470,28 @@ describe("sendChat", () => {
           type: "tool",
         },
       },
-      { content: "", progress: { id: "answer-reviewing", label: "Reviewing generation", status: "running", type: "status" } },
+      {
+        content: "",
+        progress: {
+          id: "answer-reviewing",
+          label: "Needs verification",
+          status: "failed",
+          type: "status",
+          verification: {
+            status: "failed",
+            issues: [
+              {
+                kind: "missing_path",
+                value: "src/fake.py",
+                start: 5,
+                end: 16,
+                excerpt: "`src/fake.py`",
+                severity: "failed",
+              },
+            ],
+          },
+        },
+      },
       { content: "final answer" },
     ]);
   });

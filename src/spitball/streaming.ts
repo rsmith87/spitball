@@ -1,4 +1,4 @@
-import type { ChatProgressEvent, ChatTelemetry, ContextManagement } from "./types";
+import type { ChatProgressEvent, ChatTelemetry, ContextManagement, MessageVerification, VerificationIssue } from "./types";
 
 export type ChatStreamDelta = {
   content: string;
@@ -72,8 +72,17 @@ function progressFromPayload(payload: Record<string, unknown>): ChatProgressEven
   const eventType = typeof payload.event_type === "string" ? payload.event_type : "";
   const payloadBody = isRecord(payload.payload) ? payload.payload : {};
   if (eventType === "assistant_turn_started") return { id: "assistant-generating", type: "status", status: "running", label: "Generating" };
-  if (eventType === "answer_verification_started" || eventType === "answer_verification_failed") {
+  if (eventType === "answer_verification_started") {
     return { id: "answer-reviewing", type: "status", status: "running", label: "Reviewing generation" };
+  }
+  if (eventType === "answer_verification_failed") {
+    return {
+      id: "answer-reviewing",
+      type: "status",
+      status: "failed",
+      label: "Needs verification",
+      verification: verificationFromPayload(payloadBody),
+    };
   }
   if (eventType === "tool_call_started" || eventType === "tool_call_completed" || eventType === "tool_call_failed") {
     const toolName = typeof payloadBody.tool_name === "string" ? payloadBody.tool_name : "tool";
@@ -124,6 +133,26 @@ function lineNumber(value: unknown): number | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function verificationFromPayload(payload: Record<string, unknown>): MessageVerification {
+  return {
+    status: "failed",
+    issues: Array.isArray(payload.issues) ? payload.issues.flatMap(verificationIssueFromPayload) : [],
+  };
+}
+
+function verificationIssueFromPayload(value: unknown): VerificationIssue[] {
+  if (!isRecord(value)) return [];
+  const kind = value.kind;
+  const severity = value.severity;
+  const start = value.start;
+  const end = value.end;
+  if (kind !== "missing_path" && kind !== "missing_symbol" && kind !== "missing_source_evidence") return [];
+  if (severity !== "warning" && severity !== "failed") return [];
+  if (typeof value.value !== "string" || typeof value.excerpt !== "string") return [];
+  if (!Number.isInteger(start) || !Number.isInteger(end) || typeof start !== "number" || typeof end !== "number") return [];
+  return [{ kind, value: value.value, start, end, excerpt: value.excerpt, severity }];
 }
 
 export function telemetryFromPayload(payload: unknown): ChatTelemetry | undefined {

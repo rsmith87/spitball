@@ -164,6 +164,21 @@ export type ChatProgressEvent = {
   toolName?: string;
   target?: string;
   detail?: string;
+  verification?: MessageVerification;
+};
+
+export type VerificationIssue = {
+  kind: "missing_path" | "missing_symbol" | "missing_source_evidence";
+  value: string;
+  start: number;
+  end: number;
+  excerpt: string;
+  severity: "warning" | "failed";
+};
+
+export type MessageVerification = {
+  status: "warning" | "failed";
+  issues: VerificationIssue[];
 };
 
 export type ChatMessage = {
@@ -175,4 +190,5 @@ export type ChatMessage = {
   telemetry?: ChatTelemetry;
   contextManagement?: ContextManagement;
   progressEvents?: ChatProgressEvent[];
+  verification?: MessageVerification;
 };

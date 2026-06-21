@@ -1,4 +1,4 @@
-import { CheckCircle2, ClipboardPaste, Copy, Database, Download, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, OctagonX, Pencil, PlugZap, Scissors, Send, Settings, ShieldCheck, Sun, Tags, TextSelect, Trash2, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardPaste, Copy, Database, Download, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, OctagonX, Pencil, PlugZap, Scissors, Send, Settings, ShieldCheck, Sun, Tags, TextSelect, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
@@ -10,7 +10,7 @@ import { getClientSession } from "../spitball/session";
 import { listModels } from "../spitball/models";
 import { compactThread, getContextBudget, stopGeneration, streamChat } from "../spitball/chat";
 import { createBackendProject, listBackendProjects } from "../spitball/projects";
-import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget, ContextManagement } from "../spitball/types";
+import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget, ContextManagement, MessageVerification, VerificationIssue } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
 import { deleteConversation, deleteTaxonomyItem, getProfile, listConversations, listProjects, listTaxonomyItems, saveConversation, saveProfile, saveProject, saveTaxonomyItem } from "../storage";
 import type { ConnectionProfile, Conversation, Project, TaxonomyItem } from "../storage/types";
@@ -87,7 +87,7 @@ function contextBudgetWarning(budget: ContextBudget): string {
   return "";
 }
 
-function MarkdownMessage({ content, onCodeBlockContextMenu }: { content: string; onCodeBlockContextMenu: (event: ReactMouseEvent<HTMLDivElement>, code: string) => void }) {
+function MarkdownMessage({ content, verification, onCodeBlockContextMenu }: { content: string; verification?: MessageVerification; onCodeBlockContextMenu: (event: ReactMouseEvent<HTMLDivElement>, code: string) => void }) {
   function handleContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
@@ -98,9 +98,52 @@ function MarkdownMessage({ content, onCodeBlockContextMenu }: { content: string;
 
   return (
     <div className="message-markdown" onContextMenu={handleContextMenu}>
-      <ReactMarkdown rehypePlugins={[rehypeHighlight]} remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+      <ReactMarkdown
+        components={{
+          code({ children, className, ...props }) {
+            const text = String(children).replace(/\n$/, "");
+            const issue = verification?.issues.find((item) => item.value === text || item.excerpt.includes(text));
+            return (
+              <code {...props} className={`${className || ""}${issue ? " verification-inline-issue" : ""}`.trim()}>
+                {children}
+              </code>
+            );
+          },
+        }}
+        rehypePlugins={[rehypeHighlight]}
+        remarkPlugins={[remarkGfm]}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
+}
+
+function VerificationNotice({ verification }: { verification?: MessageVerification }) {
+  if (!verification || !verification.issues.length) return null;
+  return (
+    <details className="verification-notice" open>
+      <summary>
+        <AlertTriangle size={14} />
+        <span>Needs verification</span>
+      </summary>
+      <div className="verification-issues">
+        {verification.issues.map((issue) => (
+          <div className="verification-issue" key={`${issue.kind}-${issue.start}-${issue.end}-${issue.value}`}>
+            <strong>Unverified claim</strong>
+            <span>{verificationIssueReason(issue)}</span>
+            <code>{issue.value}</code>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function verificationIssueReason(issue: VerificationIssue): string {
+  if (issue.kind === "missing_path") return "Path not found in project graph";
+  if (issue.kind === "missing_symbol") return "Symbol not found in project graph";
+  return "Missing source evidence";
 }
 
 function AgentProgress({ events }: { events: ChatProgressEvent[] }) {
@@ -797,6 +840,7 @@ export function App() {
       let streamTelemetry: ChatTelemetry | undefined;
       let contextManagement: ContextManagement | undefined;
       let progressEvents: ChatProgressEvent[] = [];
+      let verification: MessageVerification | undefined;
       const toolRuntime = agentToolsEnabled ? "agent" : undefined;
       const outboundMessages = threadId ? [userMessage] : pending.messages;
       await streamChat(
@@ -816,6 +860,7 @@ export function App() {
           if (delta.threadId) threadId = delta.threadId;
           if (delta.contextManagement) contextManagement = delta.contextManagement;
           if (delta.progress) progressEvents = mergeProgressEvents(progressEvents, delta.progress);
+          if (delta.progress?.verification) verification = delta.progress.verification;
           if (!delta.content && !delta.telemetry && !delta.progress && !delta.contextManagement) {
             setConversations((items) => upsertConversation(items, { ...waiting, threadId }));
             return;
@@ -832,6 +877,7 @@ export function App() {
             telemetry: streamTelemetry,
             contextManagement,
             progressEvents: progressEvents.length ? progressEvents : undefined,
+            verification,
           };
           const streamingConversation = withAssistantMessage({ ...pending, threadId }, streamingMessage);
           setConversations((items) => upsertConversation(items, streamingConversation));
@@ -845,6 +891,7 @@ export function App() {
         telemetry: streamTelemetry,
         contextManagement,
         progressEvents: progressEvents.length ? progressEvents : undefined,
+        verification,
       }));
       await saveConversation(saved);
       setConversations((items) => upsertConversation(items, saved));
@@ -1229,7 +1276,12 @@ export function App() {
                   </span>
                 </div>
               ) : (
-                message.role === "user" ? <p>{message.content}</p> : <MarkdownMessage content={message.content} onCodeBlockContextMenu={openCodeBlockContextMenu} />
+                message.role === "user" ? <p>{message.content}</p> : (
+                  <>
+                    <VerificationNotice verification={message.verification} />
+                    <MarkdownMessage content={message.content} verification={message.verification} onCodeBlockContextMenu={openCodeBlockContextMenu} />
+                  </>
+                )
               )}
             </article>
           ))}
