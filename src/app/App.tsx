@@ -5,11 +5,12 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import { getClientDiscovery } from "../spitball/discovery";
+import { runChatDiagnostics } from "../spitball/diagnostics";
 import { getClientSession } from "../spitball/session";
 import { listModels } from "../spitball/models";
 import { getContextBudget, streamChat } from "../spitball/chat";
 import { createBackendProject, listBackendProjects } from "../spitball/projects";
-import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
+import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget, ContextManagement } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
 import { deleteConversation, deleteTaxonomyItem, getProfile, listConversations, listProjects, listTaxonomyItems, saveConversation, saveProfile, saveProject, saveTaxonomyItem } from "../storage";
 import type { ConnectionProfile, Conversation, Project, TaxonomyItem } from "../storage/types";
@@ -120,7 +121,9 @@ function AgentProgress({ events }: { events: ChatProgressEvent[] }) {
 
 function telemetryChips(message: ChatMessage): string[] {
   const telemetry = message.telemetry || {};
+  const contextManagement = message.contextManagement;
   return [
+    contextManagement?.summarized ? "context summarized" : null,
     telemetry.tokensPerSecond != null ? `tok/s: ${telemetry.tokensPerSecond.toFixed(2)}` : null,
     telemetry.ttftMs != null ? `ttft: ${telemetry.ttftMs.toFixed(0)}ms` : null,
     telemetry.totalMs != null ? `total: ${telemetry.totalMs.toFixed(0)}ms` : null,
@@ -177,6 +180,7 @@ export function App() {
   const [contextBudget, setContextBudget] = useState<ContextBudget | null>(null);
   const [contextBudgetError, setContextBudgetError] = useState("");
   const [isChecking, setIsChecking] = useState(false);
+  const [isRunningDiagnostic, setIsRunningDiagnostic] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [taxonomyItems, setTaxonomyItems] = useState<TaxonomyItem[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -297,11 +301,20 @@ export function App() {
       return;
     }
     const timer = window.setTimeout(() => {
-      const messages = [...(activeConversation?.messages || []), { role: "user" as const, content: draft.trim() }];
+      const userMessage = { role: "user" as const, content: draft.trim() };
+      const messages = activeConversation?.threadId ? [userMessage] : [...(activeConversation?.messages || []), userMessage];
       getContextBudget(
         backendUrl,
         auth,
-        { model: selectedModel, request_type: requestType, stream: false, max_tokens: maxTokens, agent_tool_max_iterations: agentToolMaxIterations, messages },
+        {
+          model: selectedModel,
+          request_type: requestType,
+          stream: false,
+          max_tokens: maxTokens,
+          agent_tool_max_iterations: agentToolMaxIterations,
+          thread_id: activeConversation?.threadId,
+          messages,
+        },
         maxTokens,
       )
         .then((budget) => {
@@ -314,7 +327,7 @@ export function App() {
         });
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [activeConversation?.messages, agentToolMaxIterations, auth, backendUrl, connectionStatus, draft, isSending, maxTokens, requestType, selectedModel]);
+  }, [activeConversation?.messages, activeConversation?.threadId, agentToolMaxIterations, auth, backendUrl, connectionStatus, draft, isSending, maxTokens, requestType, selectedModel]);
 
   function markConnectionEdited() {
     if (connectionStatus !== "missing") setConnectionStatus("loaded");
@@ -640,6 +653,31 @@ export function App() {
     }
   }
 
+  async function runModelDiagnostic() {
+    if (!auth) {
+      setSetupError("Cannot run model diagnostic: enter an external app key first.");
+      return;
+    }
+    if (!selectedModel) {
+      setSetupError("Cannot run model diagnostic: select a model first.");
+      return;
+    }
+    setIsRunningDiagnostic(true);
+    setSetupError("");
+    try {
+      const result = await runChatDiagnostics(backendUrl, auth, {
+        model: selectedModel,
+        request_type: requestType,
+        stream: true,
+      });
+      setDiagnostic(result);
+    } catch (error) {
+      setSetupError(error instanceof Error ? error.message : "Model diagnostic failed.");
+    } finally {
+      setIsRunningDiagnostic(false);
+    }
+  }
+
   async function addProject() {
     const name = projectName.trim();
     const root = projectRoot.trim();
@@ -749,8 +787,10 @@ export function App() {
       let threadId = pending.threadId;
       let firstTokenAtMs: number | undefined;
       let streamTelemetry: ChatTelemetry | undefined;
+      let contextManagement: ContextManagement | undefined;
       let progressEvents: ChatProgressEvent[] = [];
       const toolRuntime = agentToolsEnabled ? "agent" : undefined;
+      const outboundMessages = threadId ? [userMessage] : pending.messages;
       await streamChat(
         backendUrl,
         auth,
@@ -761,13 +801,14 @@ export function App() {
           max_tokens: maxTokens,
           agent_tool_max_iterations: agentToolMaxIterations,
           thread_id: threadId,
-          messages: pending.messages,
+          messages: outboundMessages,
           tool_runtime: toolRuntime,
         },
         (delta) => {
           if (delta.threadId) threadId = delta.threadId;
+          if (delta.contextManagement) contextManagement = delta.contextManagement;
           if (delta.progress) progressEvents = mergeProgressEvents(progressEvents, delta.progress);
-          if (!delta.content && !delta.telemetry && !delta.progress) {
+          if (!delta.content && !delta.telemetry && !delta.progress && !delta.contextManagement) {
             setConversations((items) => upsertConversation(items, { ...waiting, threadId }));
             return;
           }
@@ -781,6 +822,7 @@ export function App() {
             startedAtMs,
             firstTokenAtMs,
             telemetry: streamTelemetry,
+            contextManagement,
             progressEvents: progressEvents.length ? progressEvents : undefined,
           };
           const streamingConversation = withAssistantMessage({ ...pending, threadId }, streamingMessage);
@@ -793,6 +835,7 @@ export function App() {
         startedAtMs,
         firstTokenAtMs,
         telemetry: streamTelemetry,
+        contextManagement,
         progressEvents: progressEvents.length ? progressEvents : undefined,
       }));
       await saveConversation(saved);
@@ -1326,11 +1369,19 @@ export function App() {
             <button className="primary" type="submit" disabled={isChecking}>
               {isChecking ? <Loader2 className="spin" size={16} /> : <KeyRound size={16} />} Test connection
             </button>
+            <button
+              className="secondary"
+              type="button"
+              disabled={isChecking || isRunningDiagnostic || !auth || !selectedModel}
+              onClick={() => void runModelDiagnostic()}
+            >
+              {isRunningDiagnostic ? <Loader2 className="spin" size={16} /> : <ShieldCheck size={16} />} Run model diagnostic
+            </button>
             <div className={`connection-status connection-${connectionStatus}`}>{connectionStatusLabel(connectionStatus)}</div>
             {setupError ? <div className="error-box">{setupError}</div> : null}
             <CheckRow label="Discovery" passed={Boolean(discovery)} />
             <CheckRow label="Authenticated session" passed={Boolean(session)} />
-            <CheckRow label="Model usable" passed={diagnostic?.checks.modelUsable} />
+            <CheckRow label="Model usable" passed={diagnostic?.checks.modelUsable ?? (session ? models.length > 0 : undefined)} />
             <CheckRow label="Route resolved" passed={diagnostic?.checks.routeResolved} />
             <CheckRow label="Chat diagnostic" passed={diagnostic?.checks.chat} />
             <CheckRow label="Streaming" passed={diagnostic?.checks.streaming} />

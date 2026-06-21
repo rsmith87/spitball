@@ -1,5 +1,5 @@
 import { authHeaders, joinUrl, requestJson } from "./http";
-import type { AuthState, ChatMessage, ChatTelemetry, ContextBudget } from "./types";
+import type { AuthState, ChatMessage, ChatTelemetry, ContextBudget, ContextManagement } from "./types";
 import { parseSseContent, telemetryFromPayload, type ChatStreamDelta } from "./streaming";
 
 export type ChatCompletionRequest = {
@@ -17,6 +17,7 @@ export type ChatCompletionResult = {
   content: string;
   threadId?: string;
   telemetry?: ChatTelemetry;
+  contextManagement?: ContextManagement;
 };
 
 export async function getContextBudget(
@@ -34,6 +35,7 @@ export async function getContextBudget(
         messages: request.messages,
         request_type: request.request_type,
         max_tokens: maxTokens,
+        thread_id: request.thread_id,
       }),
     },
     auth,
@@ -41,9 +43,21 @@ export async function getContextBudget(
 }
 
 export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCompletionRequest): Promise<ChatCompletionResult> {
-  let payload: { choices: Array<{ message: { content: string } }>; thread_id?: string; usage?: Record<string, unknown>; timings?: Record<string, unknown> };
+  let payload: {
+    choices: Array<{ message: { content: string } }>;
+    thread_id?: string;
+    usage?: Record<string, unknown>;
+    timings?: Record<string, unknown>;
+    context_management?: Record<string, unknown>;
+  };
   try {
-    payload = await requestJson<{ choices: Array<{ message: { content: string } }>; thread_id?: string; usage?: Record<string, unknown>; timings?: Record<string, unknown> }>(
+    payload = await requestJson<{
+      choices: Array<{ message: { content: string } }>;
+      thread_id?: string;
+      usage?: Record<string, unknown>;
+      timings?: Record<string, unknown>;
+      context_management?: Record<string, unknown>;
+    }>(
       baseUrl,
       "/v1/chat/completions",
       { method: "POST", body: JSON.stringify(request) },
@@ -57,6 +71,7 @@ export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCo
     content: payload.choices[0]?.message?.content || "",
     ...(payload.thread_id ? { threadId: payload.thread_id } : {}),
     ...(telemetry ? { telemetry } : {}),
+    ...(payload.context_management ? { contextManagement: contextManagementFromPayload(payload.context_management) } : {}),
   };
 }
 
@@ -110,6 +125,15 @@ function formatChatError(error: unknown, request: ChatCompletionRequest): Error 
   const base =
     "Agent tools could not run: the selected agent has tools disabled or no tool catalog/profile configured. Enable agent tools on that node, then try again.";
   return new Error(detail ? `${base} Backend detail: ${detail}` : base);
+}
+
+function contextManagementFromPayload(payload: Record<string, unknown>): ContextManagement {
+  return {
+    summarized: payload.summarized === true,
+    ...(typeof payload.summary_event_id === "string" ? { summaryEventId: payload.summary_event_id } : {}),
+    ...(typeof payload.prompt_tokens_before === "number" ? { promptTokensBefore: payload.prompt_tokens_before } : {}),
+    ...(typeof payload.prompt_tokens_after === "number" ? { promptTokensAfter: payload.prompt_tokens_after } : {}),
+  };
 }
 
 function isModelNotRunningDetail(detail: string): boolean {

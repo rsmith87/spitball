@@ -153,6 +153,45 @@ describe("sendChat", () => {
     });
   });
 
+  it("returns context management metadata from non-streaming responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "assistant ok" } }],
+            thread_id: "thread-123",
+            context_management: {
+              summarized: true,
+              summary_event_id: "summary-1",
+              prompt_tokens_before: 9000,
+              prompt_tokens_after: 2200,
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    const result = await sendChat(
+      "http://controller.local",
+      { mode: "external_api_key", apiKey: "key" },
+      {
+        model: "qwen",
+        messages: [{ role: "user", content: "hello" }],
+        stream: false,
+        max_tokens: 2048,
+      },
+    );
+
+    expect(result.contextManagement).toEqual({
+      summarized: true,
+      summaryEventId: "summary-1",
+      promptTokensBefore: 9000,
+      promptTokensAfter: 2200,
+    });
+  });
+
   it("passes streaming telemetry chunks with content deltas", async () => {
     const encoder = new TextEncoder();
     vi.stubGlobal(
@@ -197,6 +236,24 @@ describe("sendChat", () => {
           completionTokens: 2,
           completionMs: 250,
           tokensPerSecond: 8,
+        },
+      },
+    ]);
+  });
+
+  it("parses context management events from streams", () => {
+    const deltas = parseSseContent(
+      'data: {"type":"context_management","summarized":true,"summary_event_id":"summary-1","prompt_tokens_before":9000,"prompt_tokens_after":2200}',
+    );
+
+    expect(deltas).toEqual([
+      {
+        content: "",
+        contextManagement: {
+          summarized: true,
+          summaryEventId: "summary-1",
+          promptTokensBefore: 9000,
+          promptTokensAfter: 2200,
         },
       },
     ]);

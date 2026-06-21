@@ -1,4 +1,4 @@
-import type { ChatProgressEvent, ChatTelemetry } from "./types";
+import type { ChatProgressEvent, ChatTelemetry, ContextManagement } from "./types";
 
 export type ChatStreamDelta = {
   content: string;
@@ -6,6 +6,7 @@ export type ChatStreamDelta = {
   threadId?: string;
   telemetry?: ChatTelemetry;
   progress?: ChatProgressEvent;
+  contextManagement?: ContextManagement;
 };
 
 export function parseSseContent(chunk: string): ChatStreamDelta[] {
@@ -22,6 +23,11 @@ export function parseSseContent(chunk: string): ChatStreamDelta[] {
       }
       if (payload.type === "error" && typeof payload.error === "string") {
         values.push({ content: "", error: payload.error });
+        continue;
+      }
+      const contextManagement = contextManagementFromPayload(payload);
+      if (contextManagement) {
+        values.push({ content: "", contextManagement });
         continue;
       }
       const progress = progressFromPayload(payload);
@@ -49,6 +55,16 @@ export function parseSseContent(chunk: string): ChatStreamDelta[] {
     }
   }
   return values;
+}
+
+function contextManagementFromPayload(payload: Record<string, unknown>): ContextManagement | undefined {
+  if (payload.type !== "context_management") return undefined;
+  return {
+    summarized: payload.summarized === true,
+    ...(typeof payload.summary_event_id === "string" ? { summaryEventId: payload.summary_event_id } : {}),
+    ...(typeof payload.prompt_tokens_before === "number" ? { promptTokensBefore: payload.prompt_tokens_before } : {}),
+    ...(typeof payload.prompt_tokens_after === "number" ? { promptTokensAfter: payload.prompt_tokens_after } : {}),
+  };
 }
 
 function progressFromPayload(payload: Record<string, unknown>): ChatProgressEvent | undefined {

@@ -144,6 +144,13 @@ export type ChatTelemetry = {
   totalMs?: number;
 };
 
+export type ContextManagement = {
+  summarized: boolean;
+  summaryEventId?: string;
+  promptTokensBefore?: number;
+  promptTokensAfter?: number;
+};
+
 export type ChatProgressEvent = {
   id: string;
   type: "status" | "tool";
@@ -161,5 +168,6 @@ export type ChatMessage = {
   startedAtMs?: number;
   firstTokenAtMs?: number;
   telemetry?: ChatTelemetry;
+  contextManagement?: ContextManagement;
   progressEvents?: ChatProgressEvent[];
 };

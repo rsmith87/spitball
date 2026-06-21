@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { getContextBudget, sendChat, streamChat } from "../spitball/chat";
 import { runChatDiagnostics } from "../spitball/diagnostics";
+import { getClientSession } from "../spitball/session";
 import { getProfile } from "../storage";
 import type { Conversation, TaxonomyItem } from "../storage/types";
 
@@ -163,6 +164,12 @@ describe("App setup profile", () => {
     await user.click(screen.getByRole("button", { name: "Settings" }));
   }
 
+  function checkRow(label: string): Element {
+    const row = screen.getByText(label).closest(".check-row");
+    if (!row) throw new Error(`Expected ${label} check row to exist.`);
+    return row;
+  }
+
   it("restores a remembered backend URL and app key", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -291,6 +298,56 @@ describe("App setup profile", () => {
     await waitFor(() => expect(saveProfile).toHaveBeenCalled());
     expect(runChatDiagnostics).not.toHaveBeenCalled();
     expect(saveProfile.mock.calls[0][0]).toMatchObject({ defaultModel: "already-running-model" });
+  });
+
+  it("marks model usable from the authenticated model list without running chat diagnostics", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openSettings(user);
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+
+    await waitFor(() => expect(saveProfile).toHaveBeenCalled());
+    expect(runChatDiagnostics).not.toHaveBeenCalled();
+    expect(checkRow("Model usable").className).toContain("pass");
+    expect(checkRow("Route resolved").className).toContain("pending");
+    expect(checkRow("Chat diagnostic").className).toContain("pending");
+    expect(checkRow("Streaming").className).toContain("pending");
+  });
+
+  it("runs runtime model diagnostics separately from test connection", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openSettings(user);
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+    await waitFor(() => expect(saveProfile).toHaveBeenCalled());
+    await user.click(screen.getByRole("button", { name: /run model diagnostic/i }));
+
+    await waitFor(() => expect(runChatDiagnostics).toHaveBeenCalledWith(
+      "https://pi-controller.local",
+      { mode: "external_api_key", apiKey: "nxa_saved_key" },
+      { model: "gemma-4-E4B-it", request_type: "chat", stream: true },
+    ));
+    expect(checkRow("Route resolved").className).toContain("pass");
+    expect(checkRow("Chat diagnostic").className).toContain("pass");
+    expect(checkRow("Streaming").className).toContain("pass");
+  });
+
+  it("marks model usable as failed when the authenticated backend returns no models", async () => {
+    vi.mocked(getClientSession).mockResolvedValueOnce({
+      auth: { method: "external_key", role: "external", username: "Home App" },
+      capabilities: { openaiChatCompletions: true, streaming: true, serverHistory: false, projectContext: true },
+      models: [],
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await openSettings(user);
+    await user.click(screen.getByRole("button", { name: /test connection/i }));
+
+    await waitFor(() => expect(saveProfile).toHaveBeenCalled());
+    expect(checkRow("Model usable").className).toContain("fail");
   });
 
   it("starts a blank chat when creating a new conversation from existing history", async () => {
@@ -572,6 +629,7 @@ describe("App setup profile", () => {
     await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2));
 
     expect(vi.mocked(streamChat).mock.calls[1][2]).toMatchObject({ thread_id: "thread-abc" });
+    expect(vi.mocked(streamChat).mock.calls[1][2].messages).toEqual([{ role: "user", content: "continue" }]);
   });
 
   it("shows a pending assistant indicator before the first streamed token", async () => {
