@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { getContextBudget, sendChat, stopGeneration, streamChat } from "../spitball/chat";
+import { compactThread, getContextBudget, sendChat, stopGeneration, streamChat } from "../spitball/chat";
 import { runChatDiagnostics } from "../spitball/diagnostics";
 import { getClientSession } from "../spitball/session";
 import { getProfile } from "../storage";
@@ -131,6 +131,14 @@ vi.mock("../spitball/chat", () => ({
     precision: "approximate",
     warnings: [],
   })),
+  compactThread: vi.fn(async () => ({
+    summarized: true,
+    summaryEventId: "summary-1",
+    summary: "Older context summary",
+    promptTokensBefore: 4000,
+    promptTokensAfter: 900,
+    coveredEventCount: 6,
+  })),
   sendChat: vi.fn(async () => ({ content: "assistant ok" })),
   stopGeneration: vi.fn(async () => undefined),
   streamChat: vi.fn(async (_baseUrl, _auth, _request, onToken) => {
@@ -159,6 +167,7 @@ describe("App setup profile", () => {
       onToken({ content: "assistant ok" });
     });
     vi.mocked(getContextBudget).mockClear();
+    vi.mocked(compactThread).mockClear();
     vi.mocked(runChatDiagnostics).mockClear();
   });
 
@@ -759,6 +768,72 @@ describe("App setup profile", () => {
     expect(budget.closest(".chat-panel")?.className).toContain("context-pressure-near_limit");
   });
 
+  it("manually compacts backend thread context from the budget panel", async () => {
+    vi.mocked(getProfile).mockResolvedValueOnce({
+      ...savedProfile,
+      validatedAt: "2026-06-18T10:00:00.000Z",
+      cachedModels: [
+        {
+          id: "gemma-4-E4B-it",
+          object: "model",
+          owned_by: "spitball",
+          metadata: {
+            display_label: "Gemma",
+            request_types: ["chat"],
+            default_request_type: "chat",
+            context_identity: "gemma-4-E4B-it",
+            model_family: "gemma-4-E4B-it",
+            context_profile: null,
+            capabilities: { streaming: true, json_schema: false, grammar: false, vision: false },
+          },
+        },
+      ],
+    });
+    storedConversations = [
+      {
+        id: "chat-existing",
+        title: "Existing chat",
+        model: "gemma-4-E4B-it",
+        requestType: "chat",
+        threadId: "thread-existing",
+        messages: [
+          { role: "user", content: "old prompt" },
+          { role: "assistant", content: "old reply" },
+        ],
+        updatedAt: "2026-06-18T10:00:00.000Z",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findByTestId("spitball-context-budget");
+    await user.click(screen.getByRole("button", { name: "Compact context" }));
+
+    await waitFor(() => expect(compactThread).toHaveBeenCalledWith(
+      "https://pi-controller.local",
+      { mode: "external_api_key", apiKey: "nxa_saved_key" },
+      {
+        threadId: "thread-existing",
+        model: "gemma-4-E4B-it",
+        target: "auto",
+        recentMessageCount: 4,
+      },
+    ));
+    expect(saveConversation).toHaveBeenCalledWith(expect.objectContaining({
+      id: "chat-existing",
+      threadId: "thread-existing",
+      messages: expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: "Context compacted.",
+          contextManagement: expect.objectContaining({ summaryEventId: "summary-1" }),
+        }),
+      ]),
+    }));
+    expect(await screen.findByText("Context compacted.")).not.toBeNull();
+    expect(screen.getByText("context summarized")).not.toBeNull();
+  });
+
   it("sends agent tool runtime when agent tools are enabled", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -839,9 +914,8 @@ describe("App setup profile", () => {
     await waitFor(() => expect(screen.getByText("assistant verified")).not.toBeNull());
     expect(screen.getByText("Generated")).not.toBeNull();
     expect(screen.queryByText("Generating")).toBeNull();
-    expect(screen.getByText("read_project_file")).not.toBeNull();
+    expect(screen.getByText("read_project_file L40-L88")).not.toBeNull();
     expect(screen.getByText("runner.py")).not.toBeNull();
-    expect(screen.getByText("L40-L88")).not.toBeNull();
     expect(screen.getByText("Reviewing generation")).not.toBeNull();
     expect(document.querySelector('.agent-progress-pill[data-status="running"]')?.textContent).not.toContain("Generated");
   });

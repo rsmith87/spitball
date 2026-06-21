@@ -151,6 +151,11 @@ export type ContextManagement = {
   promptTokensAfter?: number;
 };
 
+export type ThreadCompactionResult = ContextManagement & {
+  summary?: string;
+  coveredEventCount?: number;
+};
+
 export type ChatProgressEvent = {
   id: string;
   type: "status" | "tool";

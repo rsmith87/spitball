@@ -1,5 +1,5 @@
 import { authHeaders, joinUrl, requestJson } from "./http";
-import type { AuthState, ChatMessage, ChatTelemetry, ContextBudget, ContextManagement } from "./types";
+import type { AuthState, ChatMessage, ChatTelemetry, ContextBudget, ContextManagement, ThreadCompactionResult } from "./types";
 import { parseSseContent, telemetryFromPayload, type ChatStreamDelta } from "./streaming";
 
 export type ChatCompletionRequest = {
@@ -18,6 +18,13 @@ export type ChatCompletionResult = {
   threadId?: string;
   telemetry?: ChatTelemetry;
   contextManagement?: ContextManagement;
+};
+
+export type CompactThreadRequest = {
+  threadId: string;
+  model: string;
+  target: string;
+  recentMessageCount: number;
 };
 
 export async function getContextBudget(
@@ -40,6 +47,27 @@ export async function getContextBudget(
     },
     auth,
   );
+}
+
+export async function compactThread(
+  baseUrl: string,
+  auth: AuthState,
+  request: CompactThreadRequest,
+): Promise<ThreadCompactionResult> {
+  const payload = await requestJson<Record<string, unknown>>(
+    baseUrl,
+    `/lm-api/v1/threads/${encodeURIComponent(request.threadId)}/compact`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        model: request.model,
+        target: request.target,
+        recent_message_count: request.recentMessageCount,
+      }),
+    },
+    auth,
+  );
+  return threadCompactionFromPayload(payload);
 }
 
 export async function stopGeneration(
@@ -143,6 +171,7 @@ function formatChatError(error: unknown, request: ChatCompletionRequest): Error 
     );
   }
   if (request.tool_runtime !== "agent") return new Error(message);
+  if (!isAgentToolRuntimeDetail(detail)) return new Error(message);
   const base =
     "Agent tools could not run: the selected agent has tools disabled or no tool catalog/profile configured. Enable agent tools on that node, then try again.";
   return new Error(detail ? `${base} Backend detail: ${detail}` : base);
@@ -157,8 +186,21 @@ function contextManagementFromPayload(payload: Record<string, unknown>): Context
   };
 }
 
+function threadCompactionFromPayload(payload: Record<string, unknown>): ThreadCompactionResult {
+  return {
+    ...contextManagementFromPayload(payload),
+    ...(typeof payload.summary === "string" ? { summary: payload.summary } : {}),
+    ...(typeof payload.covered_event_count === "number" ? { coveredEventCount: payload.covered_event_count } : {}),
+  };
+}
+
 function isModelNotRunningDetail(detail: string): boolean {
   return detail.toLowerCase().includes("model is not running");
+}
+
+function isAgentToolRuntimeDetail(detail: string): boolean {
+  const lower = detail.toLowerCase();
+  return lower.includes("agent tool runtime") || lower.includes("tool catalog") || lower.includes("tools disabled");
 }
 
 function backendDetail(message: string): string {

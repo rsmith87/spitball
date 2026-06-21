@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getContextBudget, sendChat, stopGeneration, streamChat } from "./chat";
+import { compactThread, getContextBudget, sendChat, stopGeneration, streamChat } from "./chat";
 import { parseSseContent } from "./streaming";
 
 describe("sendChat", () => {
@@ -34,6 +34,35 @@ describe("sendChat", () => {
     ).rejects.toThrow(
       "Agent tools could not run: the selected agent has tools disabled or no tool catalog/profile configured. Enable agent tools on that node, then try again. Backend detail: agent tool runtime is not enabled",
     );
+  });
+
+  it("does not rewrite context summarization failures as disabled agent tools", async () => {
+    const detail =
+      "Failed to summarize chat request for model gemma-4-12b-it-Q4_K_M:default: Client error '400 Bad Request' for url 'http://127.0.0.1:8091/v1/chat/completions'. Estimated prompt tokens exceeded the configured context summarization trigger.";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(JSON.stringify({ detail }), {
+          status: 400,
+          statusText: "Bad Request",
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    await expect(
+      sendChat(
+        "http://controller.local",
+        { mode: "external_api_key", apiKey: "key" },
+        {
+          model: "gemma-4-12b-it-Q4_K_M:default",
+          messages: [{ role: "user", content: "use tools" }],
+          stream: false,
+          max_tokens: 1024,
+          tool_runtime: "agent",
+        },
+      ),
+    ).rejects.toThrow(detail);
   });
 
   it("sends agent tool max iteration overrides", async () => {
@@ -128,6 +157,53 @@ describe("sendChat", () => {
     );
 
     await stopGeneration("http://controller.local", { mode: "external_api_key", apiKey: "key" }, "qwen", 0, "auto");
+  });
+
+  it("requests manual thread compaction from the shared backend API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        expect(url).toBe("http://controller.local/lm-api/v1/threads/thread-123/compact");
+        expect(init?.method).toBe("POST");
+        expect(init?.headers).toMatchObject({ "X-Llama-Pack-Key": "key" });
+        expect(JSON.parse(String(init?.body))).toEqual({
+          model: "qwen",
+          target: "auto",
+          recent_message_count: 2,
+        });
+        return new Response(
+          JSON.stringify({
+            summarized: true,
+            summary_event_id: "summary-1",
+            summary: "Older context summary",
+            prompt_tokens_before: 4000,
+            prompt_tokens_after: 900,
+            covered_event_count: 6,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    const result = await compactThread(
+      "http://controller.local",
+      { mode: "external_api_key", apiKey: "key" },
+      {
+        threadId: "thread-123",
+        model: "qwen",
+        target: "auto",
+        recentMessageCount: 2,
+      },
+    );
+
+    expect(result).toEqual({
+      summarized: true,
+      summaryEventId: "summary-1",
+      summary: "Older context summary",
+      promptTokensBefore: 4000,
+      promptTokensAfter: 900,
+      coveredEventCount: 6,
+    });
   });
 
   it("returns assistant content with non-streaming telemetry", async () => {

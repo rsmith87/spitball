@@ -8,7 +8,7 @@ import { getClientDiscovery } from "../spitball/discovery";
 import { runChatDiagnostics } from "../spitball/diagnostics";
 import { getClientSession } from "../spitball/session";
 import { listModels } from "../spitball/models";
-import { getContextBudget, stopGeneration, streamChat } from "../spitball/chat";
+import { compactThread, getContextBudget, stopGeneration, streamChat } from "../spitball/chat";
 import { createBackendProject, listBackendProjects } from "../spitball/projects";
 import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget, ContextManagement } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
@@ -110,9 +110,8 @@ function AgentProgress({ events }: { events: ChatProgressEvent[] }) {
       {events.map((event) => (
         <span className="agent-progress-pill" data-status={event.status} key={event.id}>
           {event.status === "running" ? <Loader2 className="spin" size={13} /> : event.status === "failed" ? <XCircle size={13} /> : <CheckCircle2 size={13} />}
-          <span>{event.label}</span>
+          <span>{event.detail ? `${event.label} ${event.detail}` : event.label}</span>
           {event.target ? <small>{event.target}</small> : null}
-          {event.detail ? <small>{event.detail}</small> : null}
         </span>
       ))}
     </div>
@@ -197,7 +196,9 @@ export function App() {
   const [draft, setDraft] = useState(DEFAULT_MESSAGE);
   const [isSending, setIsSending] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [isCompactingContext, setIsCompactingContext] = useState(false);
   const [stopError, setStopError] = useState("");
+  const [compactContextError, setCompactContextError] = useState("");
   const [composerContextMenu, setComposerContextMenu] = useState<ComposerContextMenu | null>(null);
   const [conversationContextMenu, setConversationContextMenu] = useState<ConversationContextMenu | null>(null);
   const [messageContextMenu, setMessageContextMenu] = useState<MessageContextMenu | null>(null);
@@ -779,6 +780,7 @@ export function App() {
     setIsSending(true);
     setIsStopping(false);
     setStopError("");
+    setCompactContextError("");
     activeGenerationRef.current = { model: selectedModel, slotId: 0, target: "auto" };
     const startedAtMs = performance.now();
     const waiting = withAssistantMessage(pending, {
@@ -872,6 +874,42 @@ export function App() {
     } catch (error) {
       setStopError(error instanceof Error ? error.message : "Stop generation failed.");
       setIsStopping(false);
+    }
+  }
+
+  async function compactActiveConversationContext() {
+    if (!auth || !selectedModel || !activeConversation?.threadId || isSending || isCompactingContext) return;
+    setIsCompactingContext(true);
+    setCompactContextError("");
+    try {
+      const result = await compactThread(
+        backendUrl,
+        auth,
+        {
+          threadId: activeConversation.threadId,
+          model: selectedModel,
+          target: "auto",
+          recentMessageCount: 4,
+        },
+      );
+      const message: ChatMessage = {
+        role: "assistant",
+        content: result.summarized ? "Context compacted." : "Context is already compact.",
+        contextManagement: result,
+      };
+      const saved: Conversation = {
+        ...activeConversation,
+        model: selectedModel,
+        requestType,
+        messages: [...activeConversation.messages, message],
+        updatedAt: new Date().toISOString(),
+      };
+      await saveConversation(saved);
+      setConversations((items) => upsertConversation(items, saved));
+    } catch (error) {
+      setCompactContextError(error instanceof Error ? error.message : "Context compaction failed");
+    } finally {
+      setIsCompactingContext(false);
     }
   }
 
@@ -1248,8 +1286,21 @@ export function App() {
                 <span>Prompt {formatCompactTokenCount(contextBudget.prompt_tokens_estimated)}</span>
                 <span>Reserved output {formatCompactTokenCount(contextBudget.reserved_completion_tokens)}</span>
               </div>
+              <div className="context-budget-actions">
+                <button
+                  aria-label="Compact context"
+                  className="context-compact-button"
+                  type="button"
+                  disabled={!activeConversation?.threadId || isSending || isCompactingContext || !auth || !selectedModel}
+                  onClick={() => void compactActiveConversationContext()}
+                >
+                  {isCompactingContext ? <Loader2 className="spin" size={15} /> : <Scissors size={15} />} Compact context
+                </button>
+                {!activeConversation?.threadId ? <small>Send once before compacting backend context.</small> : null}
+              </div>
               <small>{contextBudget.precision === "approximate" ? "Approximate estimate" : "Tokenizer estimate"}</small>
               {contextBudgetWarning(contextBudget) ? <small className="context-warning">{contextBudgetWarning(contextBudget)}</small> : null}
+              {compactContextError ? <small className="context-warning">{compactContextError}</small> : null}
             </div>
           ) : contextBudgetError ? (
             <div className="context-budget error" data-testid="spitball-context-budget">{contextBudgetError}</div>
