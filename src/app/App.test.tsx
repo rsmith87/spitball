@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { getContextBudget, sendChat, streamChat } from "../spitball/chat";
+import { getContextBudget, sendChat, stopGeneration, streamChat } from "../spitball/chat";
 import { runChatDiagnostics } from "../spitball/diagnostics";
 import { getClientSession } from "../spitball/session";
 import { getProfile } from "../storage";
@@ -132,6 +132,7 @@ vi.mock("../spitball/chat", () => ({
     warnings: [],
   })),
   sendChat: vi.fn(async () => ({ content: "assistant ok" })),
+  stopGeneration: vi.fn(async () => undefined),
   streamChat: vi.fn(async (_baseUrl, _auth, _request, onToken) => {
     onToken({ content: "assistant ok" });
   }),
@@ -152,6 +153,7 @@ describe("App setup profile", () => {
     storedConversations = [];
     storedTaxonomyItems = [];
     vi.mocked(sendChat).mockClear();
+    vi.mocked(stopGeneration).mockClear();
     vi.mocked(streamChat).mockClear();
     vi.mocked(streamChat).mockImplementation(async (_baseUrl, _auth, _request, onToken) => {
       onToken({ content: "assistant ok" });
@@ -472,6 +474,28 @@ describe("App setup profile", () => {
     await user.keyboard("{Enter}");
 
     await waitFor(() => expect(screen.getByText("assistant ok")).not.toBeNull());
+  });
+
+  it("changes the send button to stop while generation is running", async () => {
+    let resolveStream: () => void = () => undefined;
+    vi.mocked(streamChat).mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        resolveStream = resolve;
+      });
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "stop this");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    const stopButton = await screen.findByRole("button", { name: "Stop generation" });
+    await user.click(stopButton);
+
+    expect(stopGeneration).toHaveBeenCalledWith("https://pi-controller.local", { mode: "external_api_key", apiKey: "nxa_saved_key" }, "gemma-4-E4B-it", 0, "auto");
+    resolveStream();
   });
 
   it("shows clipboard actions from the composer right click menu", async () => {

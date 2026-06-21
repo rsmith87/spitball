@@ -1,4 +1,4 @@
-import { CheckCircle2, ClipboardPaste, Copy, Database, Download, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, Pencil, PlugZap, Scissors, Send, Settings, ShieldCheck, Sun, Tags, TextSelect, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, ClipboardPaste, Copy, Database, Download, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, OctagonX, Pencil, PlugZap, Scissors, Send, Settings, ShieldCheck, Sun, Tags, TextSelect, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import ReactMarkdown from "react-markdown";
@@ -8,7 +8,7 @@ import { getClientDiscovery } from "../spitball/discovery";
 import { runChatDiagnostics } from "../spitball/diagnostics";
 import { getClientSession } from "../spitball/session";
 import { listModels } from "../spitball/models";
-import { getContextBudget, streamChat } from "../spitball/chat";
+import { getContextBudget, stopGeneration, streamChat } from "../spitball/chat";
 import { createBackendProject, listBackendProjects } from "../spitball/projects";
 import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget, ContextManagement } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
@@ -196,6 +196,8 @@ export function App() {
   const [activeView, setActiveView] = useState<"chat" | "settings">("chat");
   const [draft, setDraft] = useState(DEFAULT_MESSAGE);
   const [isSending, setIsSending] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [stopError, setStopError] = useState("");
   const [composerContextMenu, setComposerContextMenu] = useState<ComposerContextMenu | null>(null);
   const [conversationContextMenu, setConversationContextMenu] = useState<ConversationContextMenu | null>(null);
   const [messageContextMenu, setMessageContextMenu] = useState<MessageContextMenu | null>(null);
@@ -210,6 +212,7 @@ export function App() {
   });
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const activeGenerationRef = useRef<{ model: string; slotId: number; target: string } | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark-mode", darkMode);
@@ -753,7 +756,7 @@ export function App() {
   }
 
   async function sendMessage() {
-    if (!auth || !selectedModel || !draft.trim()) return;
+    if (!auth || !selectedModel || !draft.trim() || isSending) return;
     const baseMessages = activeConversation?.messages || [];
     const userMessage: ChatMessage = { role: "user", content: draft.trim() };
     const conversation: Conversation = activeConversation || {
@@ -774,6 +777,9 @@ export function App() {
     setDraft("");
     setActiveId(pending.id);
     setIsSending(true);
+    setIsStopping(false);
+    setStopError("");
+    activeGenerationRef.current = { model: selectedModel, slotId: 0, target: "auto" };
     const startedAtMs = performance.now();
     const waiting = withAssistantMessage(pending, {
       role: "assistant",
@@ -845,7 +851,27 @@ export function App() {
       await saveConversation(failed);
       setConversations((items) => upsertConversation(items, failed));
     } finally {
+      activeGenerationRef.current = null;
       setIsSending(false);
+      setIsStopping(false);
+    }
+  }
+
+  async function stopActiveGeneration() {
+    if (!auth || !activeGenerationRef.current || isStopping) return;
+    setIsStopping(true);
+    setStopError("");
+    try {
+      await stopGeneration(
+        backendUrl,
+        auth,
+        activeGenerationRef.current.model,
+        activeGenerationRef.current.slotId,
+        activeGenerationRef.current.target,
+      );
+    } catch (error) {
+      setStopError(error instanceof Error ? error.message : "Stop generation failed.");
+      setIsStopping(false);
     }
   }
 
@@ -1260,8 +1286,19 @@ export function App() {
               {composerContextMenu.error ? <div className="composer-context-error" role="status">{composerContextMenu.error}</div> : null}
             </div>
           ) : null}
-          <button onClick={() => void sendMessage()} disabled={!auth || !selectedModel || isSending}>
-            {isSending ? <Loader2 className="spin" size={17} /> : <Send size={17} />} Send
+          {stopError ? <div className="context-budget error" data-testid="spitball-stop-error">{stopError}</div> : null}
+          <button
+            aria-label={isSending ? "Stop generation" : "Send message"}
+            onClick={() => {
+              if (isSending) {
+                void stopActiveGeneration();
+                return;
+              }
+              void sendMessage();
+            }}
+            disabled={isSending ? isStopping : !auth || !selectedModel}
+          >
+            {isSending ? <OctagonX size={17} /> : <Send size={17} />} {isSending ? "Stop" : "Send"}
           </button>
         </footer>
       </section>

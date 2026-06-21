@@ -42,6 +42,27 @@ export async function getContextBudget(
   );
 }
 
+export async function stopGeneration(
+  baseUrl: string,
+  auth: AuthState,
+  model: string,
+  slotId: number,
+  target: string,
+): Promise<void> {
+  await requestJson<Record<string, unknown>>(
+    baseUrl,
+    `/lm-api/v1/chat/${encodeURIComponent(model)}/kv/slots/${slotId}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        action: "cancel",
+        target,
+      }),
+    },
+    auth,
+  );
+}
+
 export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCompletionRequest): Promise<ChatCompletionResult> {
   let payload: {
     choices: Array<{ message: { content: string } }>;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getContextBudget, sendChat, streamChat } from "./chat";
+import { getContextBudget, sendChat, stopGeneration, streamChat } from "./chat";
 import { parseSseContent } from "./streaming";
 
 describe("sendChat", () => {
@@ -110,6 +110,24 @@ describe("sendChat", () => {
     );
 
     expect(budget.remaining_context_tokens).toBe(32156);
+  });
+
+  it("sends stop generation requests through the shared backend API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        expect(url).toBe("http://controller.local/lm-api/v1/chat/qwen/kv/slots/0");
+        expect(init?.method).toBe("POST");
+        expect(init?.headers).toMatchObject({ "X-Llama-Pack-Key": "key" });
+        expect(JSON.parse(String(init?.body))).toEqual({ action: "cancel", target: "auto" });
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    await stopGeneration("http://controller.local", { mode: "external_api_key", apiKey: "key" }, "qwen", 0, "auto");
   });
 
   it("returns assistant content with non-streaming telemetry", async () => {
