@@ -286,6 +286,66 @@ describe("sendChat", () => {
     });
   });
 
+  it("returns verification metadata from non-streaming responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: "Use `src/fake.py`." } }],
+            llama_pack: {
+              verification: {
+                status: "unverified",
+                ok: false,
+                verified_paths: [],
+                missing_paths: ["src/fake.py"],
+                verified_symbols: [],
+                missing_symbols: [],
+                missing_source_evidence: false,
+                issues: [
+                  {
+                    kind: "missing_path",
+                    value: "src/fake.py",
+                    start: 5,
+                    end: 16,
+                    excerpt: "`src/fake.py`",
+                    severity: "failed",
+                  },
+                ],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    const result = await sendChat(
+      "http://controller.local",
+      { mode: "external_api_key", apiKey: "key" },
+      {
+        model: "qwen",
+        messages: [{ role: "user", content: "hello" }],
+        stream: false,
+        max_tokens: 2048,
+      },
+    );
+
+    expect(result.verification).toEqual({
+      status: "unverified",
+      issues: [
+        {
+          kind: "missing_path",
+          value: "src/fake.py",
+          start: 5,
+          end: 16,
+          excerpt: "`src/fake.py`",
+          severity: "failed",
+        },
+      ],
+    });
+  });
+
   it("passes streaming telemetry chunks with content deltas", async () => {
     const encoder = new TextEncoder();
     vi.stubGlobal(
@@ -493,6 +553,31 @@ describe("sendChat", () => {
         },
       },
       { content: "final answer" },
+    ]);
+  });
+
+  it("parses verification metadata from final agent tool payloads", () => {
+    const deltas = parseSseContent(
+      'data: {"type":"final","choices":[{"message":{"role":"assistant","content":"Use `src/fake.py`."}}],"llama_pack":{"verification":{"status":"unverified","ok":false,"verified_paths":[],"missing_paths":["src/fake.py"],"verified_symbols":[],"missing_symbols":[],"missing_source_evidence":false,"issues":[{"kind":"missing_path","value":"src/fake.py","start":5,"end":16,"excerpt":"`src/fake.py`","severity":"failed"}]}}}',
+    );
+
+    expect(deltas).toEqual([
+      {
+        content: "Use `src/fake.py`.",
+        verification: {
+          status: "unverified",
+          issues: [
+            {
+              kind: "missing_path",
+              value: "src/fake.py",
+              start: 5,
+              end: 16,
+              excerpt: "`src/fake.py`",
+              severity: "failed",
+            },
+          ],
+        },
+      },
     ]);
   });
 });

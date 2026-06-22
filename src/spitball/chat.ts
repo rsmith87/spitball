@@ -1,6 +1,6 @@
 import { authHeaders, joinUrl, requestJson } from "./http";
-import type { AuthState, ChatMessage, ChatTelemetry, ContextBudget, ContextManagement, ThreadCompactionResult } from "./types";
-import { parseSseContent, telemetryFromPayload, type ChatStreamDelta } from "./streaming";
+import type { AuthState, ChatMessage, ChatTelemetry, ContextBudget, ContextManagement, MessageVerification, ThreadCompactionResult } from "./types";
+import { parseSseContent, telemetryFromPayload, verificationFromChatPayload, type ChatStreamDelta } from "./streaming";
 
 export type ChatCompletionRequest = {
   model: string;
@@ -18,6 +18,7 @@ export type ChatCompletionResult = {
   threadId?: string;
   telemetry?: ChatTelemetry;
   contextManagement?: ContextManagement;
+  verification?: MessageVerification;
 };
 
 export type CompactThreadRequest = {
@@ -98,6 +99,7 @@ export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCo
     usage?: Record<string, unknown>;
     timings?: Record<string, unknown>;
     context_management?: Record<string, unknown>;
+    llama_pack?: Record<string, unknown>;
   };
   try {
     payload = await requestJson<{
@@ -106,6 +108,7 @@ export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCo
       usage?: Record<string, unknown>;
       timings?: Record<string, unknown>;
       context_management?: Record<string, unknown>;
+      llama_pack?: Record<string, unknown>;
     }>(
       baseUrl,
       "/v1/chat/completions",
@@ -116,11 +119,13 @@ export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCo
     throw formatChatError(error, request);
   }
   const telemetry = telemetryFromPayload(payload);
+  const verification = verificationFromChatPayload(payload);
   return {
     content: payload.choices[0]?.message?.content || "",
     ...(payload.thread_id ? { threadId: payload.thread_id } : {}),
     ...(telemetry ? { telemetry } : {}),
     ...(payload.context_management ? { contextManagement: contextManagementFromPayload(payload.context_management) } : {}),
+    ...(verification ? { verification } : {}),
   };
 }
 

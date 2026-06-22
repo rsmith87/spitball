@@ -962,6 +962,39 @@ describe("App setup profile", () => {
     expect(document.querySelector(".verification-inline-issue")?.textContent).toBe("src/fake.py");
   });
 
+  it("renders verification warnings from final streamed assistant metadata", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(async (_baseUrl, _auth, _request, onToken) => {
+      onToken({
+        content: "Use `src/fake.py`.",
+        verification: {
+          status: "unverified",
+          issues: [
+            {
+              kind: "missing_path",
+              value: "src/fake.py",
+              start: 5,
+              end: 16,
+              excerpt: "`src/fake.py`",
+              severity: "failed",
+            },
+          ],
+        },
+      });
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText("Agent tools"));
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "verify this");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("Needs verification")).not.toBeNull());
+    expect(screen.getByText("Path not found in project graph")).not.toBeNull();
+    expect(document.querySelector(".verification-inline-issue")?.textContent).toBe("src/fake.py");
+  });
+
   it("opens setup controls from the Settings sidebar item", async () => {
     const user = userEvent.setup();
     render(<App />);

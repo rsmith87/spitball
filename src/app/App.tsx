@@ -861,7 +861,8 @@ export function App() {
           if (delta.contextManagement) contextManagement = delta.contextManagement;
           if (delta.progress) progressEvents = mergeProgressEvents(progressEvents, delta.progress);
           if (delta.progress?.verification) verification = delta.progress.verification;
-          if (!delta.content && !delta.telemetry && !delta.progress && !delta.contextManagement) {
+          if (delta.verification) verification = delta.verification;
+          if (!delta.content && !delta.telemetry && !delta.progress && !delta.contextManagement && !delta.verification) {
             setConversations((items) => upsertConversation(items, { ...waiting, threadId }));
             return;
           }

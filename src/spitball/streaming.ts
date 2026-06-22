@@ -7,6 +7,7 @@ export type ChatStreamDelta = {
   telemetry?: ChatTelemetry;
   progress?: ChatProgressEvent;
   contextManagement?: ContextManagement;
+  verification?: MessageVerification;
 };
 
 export function parseSseContent(chunk: string): ChatStreamDelta[] {
@@ -37,7 +38,11 @@ export function parseSseContent(chunk: string): ChatStreamDelta[] {
       }
       if (payload.type === "final") {
         const content = payload.choices?.[0]?.message?.content;
-        values.push({ content: typeof content === "string" ? content : "" });
+        const verification = verificationFromChatPayload(payload);
+        values.push({
+          content: typeof content === "string" ? content : "",
+          ...(verification ? { verification } : {}),
+        });
         continue;
       }
       const telemetry = telemetryFromPayload(payload);
@@ -81,7 +86,7 @@ function progressFromPayload(payload: Record<string, unknown>): ChatProgressEven
       type: "status",
       status: "failed",
       label: "Needs verification",
-      verification: verificationFromPayload(payloadBody),
+      verification: verificationFromTracePayload(payloadBody),
     };
   }
   if (eventType === "tool_call_started" || eventType === "tool_call_completed" || eventType === "tool_call_failed") {
@@ -135,7 +140,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function verificationFromPayload(payload: Record<string, unknown>): MessageVerification {
+export function verificationFromChatPayload(payload: unknown): MessageVerification | undefined {
+  if (!isRecord(payload)) return undefined;
+  const llamaPack = payload.llama_pack;
+  if (!isRecord(llamaPack)) return undefined;
+  return verificationFromPayload(llamaPack.verification);
+}
+
+export function verificationFromPayload(payload: unknown): MessageVerification | undefined {
+  if (!isRecord(payload)) return undefined;
+  const status = payload.status;
+  if (!isVerificationStatus(status)) return undefined;
+  return {
+    status,
+    issues: Array.isArray(payload.issues) ? payload.issues.flatMap(verificationIssueFromPayload) : [],
+  };
+}
+
+function verificationFromTracePayload(payload: Record<string, unknown>): MessageVerification {
   return {
     status: "failed",
     issues: Array.isArray(payload.issues) ? payload.issues.flatMap(verificationIssueFromPayload) : [],
@@ -182,4 +204,15 @@ export function telemetryFromPayload(payload: unknown): ChatTelemetry | undefine
 function asNumber(value: unknown): number | null {
   if (typeof value !== "number" || Number.isNaN(value)) return null;
   return value;
+}
+
+function isVerificationStatus(value: unknown): value is MessageVerification["status"] {
+  return (
+    value === "verified"
+    || value === "no_code_claims"
+    || value === "unverified"
+    || value === "unavailable"
+    || value === "warning"
+    || value === "failed"
+  );
 }

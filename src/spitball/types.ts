@@ -177,7 +177,7 @@ export type VerificationIssue = {
 };
 
 export type MessageVerification = {
-  status: "warning" | "failed";
+  status: "verified" | "no_code_claims" | "unverified" | "unavailable" | "warning" | "failed";
   issues: VerificationIssue[];
 };
 
