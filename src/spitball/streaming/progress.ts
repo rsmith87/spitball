@@ -1,0 +1,70 @@
+import type { ChatProgressEvent } from "../types";
+import { verificationFromTracePayload } from "./verification";
+
+export function progressFromPayload(payload: Record<string, unknown>): ChatProgressEvent | undefined {
+  if (payload.type !== "trace_event") return undefined;
+  const eventType = typeof payload.event_type === "string" ? payload.event_type : "";
+  const payloadBody = isRecord(payload.payload) ? payload.payload : {};
+  if (eventType === "assistant_turn_started") return { id: "assistant-generating", type: "status", status: "running", label: "Generating" };
+  if (eventType === "answer_verification_started") {
+    return { id: "answer-reviewing", type: "status", status: "running", label: "Reviewing generation" };
+  }
+  if (eventType === "answer_verification_failed") {
+    return {
+      id: "answer-reviewing",
+      type: "status",
+      status: "failed",
+      label: "Needs verification",
+      verification: verificationFromTracePayload(payloadBody),
+    };
+  }
+  if (eventType === "tool_call_started" || eventType === "tool_call_completed" || eventType === "tool_call_failed") {
+    const toolName = typeof payloadBody.tool_name === "string" ? payloadBody.tool_name : "tool";
+    const status = eventType === "tool_call_started" ? "running" : eventType === "tool_call_failed" || payload.status === "failed" ? "failed" : "passed";
+    const target = toolTarget(payloadBody);
+    return {
+      id: toolProgressId(payload, toolName, target.target),
+      type: "tool",
+      status,
+      label: toolName,
+      toolName,
+      ...target,
+    };
+  }
+  return undefined;
+}
+
+function toolProgressId(payload: Record<string, unknown>, toolName: string, target: string | undefined): string {
+  const toolCallId = typeof payload.tool_call_id === "string" ? payload.tool_call_id : "";
+  if (toolCallId) return `tool-${toolCallId}`;
+  return `tool-${toolName}-${target || "call"}`;
+}
+
+function toolTarget(payload: Record<string, unknown>): { target?: string; detail?: string } {
+  const args = isRecord(payload.arguments) ? payload.arguments : {};
+  const rawPath = typeof args.path === "string" ? args.path : typeof args.file === "string" ? args.file : "";
+  const detail = lineDetail(args);
+  if (!rawPath) return detail ? { detail } : {};
+  const segments = rawPath.split(/[\\/]/).filter(Boolean);
+  return {
+    target: segments[segments.length - 1] || rawPath,
+    ...(detail ? { detail } : {}),
+  };
+}
+
+function lineDetail(args: Record<string, unknown>): string | undefined {
+  const start = lineNumber(args.start_line) ?? lineNumber(args.startLine) ?? lineNumber(args.line_start) ?? lineNumber(args.lineStart) ?? lineNumber(args.line);
+  const end = lineNumber(args.end_line) ?? lineNumber(args.endLine) ?? lineNumber(args.line_end) ?? lineNumber(args.lineEnd);
+  if (start == null && end == null) return undefined;
+  if (start != null && end != null && start !== end) return `L${start}-L${end}`;
+  return `L${start ?? end}`;
+}
+
+function lineNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) return null;
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}

@@ -1,27 +1,25 @@
-import { AlertTriangle, CheckCircle2, ClipboardPaste, Copy, Database, Download, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, OctagonX, Pencil, PlugZap, Scissors, Send, Settings, ShieldCheck, Sun, Tags, TextSelect, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, ClipboardPaste, Copy, Database, Download, FolderOpen, KeyRound, Loader2, MessageSquare, Moon, OctagonX, Pencil, PlugZap, Scissors, Send, Settings, ShieldCheck, Sun, Tags, TextSelect, Trash2, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
-import ReactMarkdown from "react-markdown";
-import rehypeHighlight from "rehype-highlight";
-import remarkGfm from "remark-gfm";
-import { getClientDiscovery } from "../spitball/discovery";
-import { runChatDiagnostics } from "../spitball/diagnostics";
-import { getClientSession } from "../spitball/session";
-import { listModels } from "../spitball/models";
-import { compactThread, getContextBudget, stopGeneration, streamChat } from "../spitball/chat";
-import { createBackendProject, listBackendProjects } from "../spitball/projects";
-import type { AuthState, ChatDiagnostic, ChatMessage, ChatProgressEvent, ChatTelemetry, ClientDiscovery, ClientModel, ClientSession, ContextBudget, ContextManagement, MessageVerification, VerificationIssue } from "../spitball/types";
+import { createBackendProject } from "../spitball/projects";
+import type { AuthState, ChatDiagnostic, ChatMessage, ClientDiscovery, ClientModel, ClientSession, ContextBudget } from "../spitball/types";
 import { exportConversations } from "../storage/exportImport";
-import { deleteConversation, deleteTaxonomyItem, getProfile, listConversations, listProjects, listTaxonomyItems, saveConversation, saveProfile, saveProject, saveTaxonomyItem } from "../storage";
-import type { ConnectionProfile, Conversation, Project, TaxonomyItem } from "../storage/types";
+import { deleteConversation, deleteTaxonomyItem, saveConversation, saveProject, saveTaxonomyItem } from "../storage";
+import type { Conversation, Project, TaxonomyItem } from "../storage/types";
+import { AgentProgress } from "./components/AgentProgress";
+import { CheckRow } from "./components/CheckRow";
+import { MarkdownMessage } from "./components/MarkdownMessage";
+import { VerificationNotice } from "./components/VerificationNotice";
+import { useAppBootstrap } from "./hooks/useAppBootstrap";
+import { useChatSession } from "./hooks/useChatSession";
+import { useConnectionSetup } from "./hooks/useConnectionSetup";
+import { upsertConversation, upsertTaxonomyItem } from "./utils/chatState";
+import { contextMenuPosition, selectedText } from "./utils/contextMenus";
+import { contextBudgetPercent, contextBudgetSummary, contextBudgetWarning, formatCompactTokenCount, telemetryChips } from "./utils/chatView";
+import { clampAgentToolMaxIterations, clampMaxTokens, connectionStatusLabel, DEFAULT_AGENT_TOOL_MAX_ITERATIONS, DEFAULT_MAX_TOKENS, MAX_AGENT_TOOL_ITERATIONS, MAX_OUTPUT_TOKENS, projectIdForChatRequest, type ConnectionStatus } from "./utils/settings";
 import spitballLogo from "../styles/spitball-logo.png";
 
 const DEFAULT_MESSAGE = "Ask a private model about the current project.";
-const DEFAULT_MAX_TOKENS = 1024;
-const DEFAULT_AGENT_TOOL_MAX_ITERATIONS = 12;
-const MAX_OUTPUT_TOKENS = 32768;
-const MAX_AGENT_TOOL_ITERATIONS = 32;
-type ConnectionStatus = "missing" | "loaded" | "checking" | "ready" | "failed";
 type ComposerContextMenu = {
   x: number;
   y: number;
@@ -57,180 +55,6 @@ type ProjectContextMenu = {
 
 function newId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
-}
-
-function clampMaxTokens(value: number): number {
-  return Math.min(MAX_OUTPUT_TOKENS, Math.max(1, value));
-}
-
-function clampAgentToolMaxIterations(value: number): number {
-  return Math.min(MAX_AGENT_TOOL_ITERATIONS, Math.max(1, value));
-}
-
-function formatCompactTokenCount(value: number): string {
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
-  return String(value);
-}
-
-function contextBudgetSummary(budget: ContextBudget): string {
-  const used = budget.prompt_tokens_estimated + budget.reserved_completion_tokens;
-  return `Context: ${formatCompactTokenCount(used)} / ${formatCompactTokenCount(budget.context_window_tokens)} used · ${formatCompactTokenCount(budget.remaining_context_tokens)} left`;
-}
-
-function contextBudgetPercent(budget: ContextBudget): number {
-  return Math.min(100, Math.max(0, Math.round(budget.usage_ratio * 100)));
-}
-
-function contextBudgetWarning(budget: ContextBudget): string {
-  if (budget.status === "too_large") return "Too large to send. Remove context or reduce expected output.";
-  if (budget.status === "near_limit") return "Near limit. Shorten older messages or start a new conversation.";
-  return "";
-}
-
-function projectIdForChatRequest(backendMode: string, toolRuntime: "agent" | undefined, selectedProjectId: string | undefined): string | undefined {
-  if (toolRuntime !== "agent") return undefined;
-  if (backendMode !== "agent" && backendMode !== "controller") return undefined;
-  return selectedProjectId;
-}
-
-function MarkdownMessage({ content, verification, onCodeBlockContextMenu }: { content: string; verification?: MessageVerification; onCodeBlockContextMenu: (event: ReactMouseEvent<HTMLDivElement>, code: string) => void }) {
-  function handleContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-    const codeElement = target.closest("pre code");
-    if (!codeElement) return;
-    onCodeBlockContextMenu(event, codeElement.textContent || "");
-  }
-
-  return (
-    <div className="message-markdown" onContextMenu={handleContextMenu}>
-      <ReactMarkdown
-        components={{
-          code({ children, className, ...props }) {
-            const text = String(children).replace(/\n$/, "");
-            const issue = verification?.issues.find((item) => item.value === text || item.excerpt.includes(text));
-            return (
-              <code {...props} className={`${className || ""}${issue ? " verification-inline-issue" : ""}`.trim()}>
-                {children}
-              </code>
-            );
-          },
-        }}
-        rehypePlugins={[rehypeHighlight]}
-        remarkPlugins={[remarkGfm]}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-function VerificationNotice({ verification }: { verification?: MessageVerification }) {
-  if (!verification) return null;
-
-  const label = verificationStatusLabel(verification);
-  const statusIcon =
-    verification.status === "verified" || verification.status === "no_code_claims" ? (
-      <CheckCircle2 size={14} />
-    ) : verification.status === "failed" ? (
-      <XCircle size={14} />
-    ) : (
-      <AlertTriangle size={14} />
-    );
-
-  if (!verification.issues.length) {
-    return (
-      <div className="verification-status" data-status={verification.status}>
-        {statusIcon}
-        <span>{label}</span>
-      </div>
-    );
-  }
-
-  return (
-    <details className="verification-notice" data-status={verification.status} open>
-      <summary className="verification-status" data-status={verification.status}>
-        {statusIcon}
-        <span>{label}</span>
-      </summary>
-      <div className="verification-issues">
-        {verification.issues.map((issue) => (
-          <div className="verification-issue" key={`${issue.kind}-${issue.start}-${issue.end}-${issue.value}`}>
-            <strong>Unverified claim</strong>
-            <span>{verificationIssueReason(issue)}</span>
-            <code>{issue.value}</code>
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function verificationStatusLabel(verification: MessageVerification): string {
-  if (verification.issues.length) return "Needs verification";
-  if (verification.status === "verified") return "Verified";
-  if (verification.status === "no_code_claims") return "No code claims";
-  if (verification.status === "unverified") return "Needs verification";
-  if (verification.status === "unavailable") return "Verification unavailable";
-  if (verification.status === "warning") return "Verification warning";
-  if (verification.status === "failed") return "Verification failed";
-  const status: never = verification.status;
-  return status;
-}
-
-function verificationIssueReason(issue: VerificationIssue): string {
-  if (issue.kind === "missing_path") return "Path not found in project graph";
-  if (issue.kind === "missing_symbol") return "Symbol not found in project graph";
-  return "Missing source evidence";
-}
-
-function AgentProgress({ events }: { events: ChatProgressEvent[] }) {
-  if (!events.length) return null;
-  return (
-    <div className="agent-progress" aria-label="Agent progress">
-      {events.map((event) => (
-        <span className="agent-progress-pill" data-status={event.status} key={event.id}>
-          {event.status === "running" ? <Loader2 className="spin" size={13} /> : event.status === "failed" ? <XCircle size={13} /> : <CheckCircle2 size={13} />}
-          <span>{event.detail ? `${event.label} ${event.detail}` : event.label}</span>
-          {event.target ? <small>{event.target}</small> : null}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function telemetryChips(message: ChatMessage): string[] {
-  const telemetry = message.telemetry || {};
-  const contextManagement = message.contextManagement;
-  return [
-    contextManagement?.summarized ? "context summarized" : null,
-    telemetry.tokensPerSecond != null ? `tok/s: ${telemetry.tokensPerSecond.toFixed(2)}` : null,
-    telemetry.ttftMs != null ? `ttft: ${telemetry.ttftMs.toFixed(0)}ms` : null,
-    telemetry.totalMs != null ? `total: ${telemetry.totalMs.toFixed(0)}ms` : null,
-    telemetry.promptTokens != null ? `prompt_toks: ${telemetry.promptTokens}` : null,
-    telemetry.completionTokens != null ? `gen_toks: ${telemetry.completionTokens}` : null,
-  ].filter(Boolean) as string[];
-}
-
-function connectionStatusLabel(status: ConnectionStatus): string {
-  if (status === "ready") return "Connection ready";
-  if (status === "checking") return "Checking connection";
-  if (status === "failed") return "Connection check failed";
-  if (status === "loaded") return "Saved connection loaded";
-  return "Connection not configured";
-}
-
-function contextMenuPosition(clientX: number, clientY: number): { x: number; y: number } {
-  const menuWidth = 184;
-  const menuHeight = 188;
-  return {
-    x: Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8)),
-    y: Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8)),
-  };
-}
-
-function selectedText(value: string, selectionStart: number, selectionEnd: number): string {
-  return value.slice(selectionStart, selectionEnd);
 }
 
 function requireClipboard(action: string): Clipboard {
@@ -313,39 +137,26 @@ export function App() {
   const availableRequestTypes = model?.metadata.request_types || [];
   const contextPressureClass = contextBudget ? `context-pressure-${contextBudget.status}` : "context-pressure-empty";
 
-  useEffect(() => {
-    void listConversations().then((items) => {
-      setConversations(items);
-      if (items[0]) setActiveId(items[0].id);
-    });
-    void listProjects().then((items) => {
-      setProjects(items);
-      if (items[0]) setSelectedProjectId(items[0].id);
-    });
-    void listTaxonomyItems().then((items) => {
-      setTaxonomyItems(items);
-    });
-    void getProfile("default").then((profile) => {
-      if (!profile) return;
-      setBackendUrl(profile.backendUrl);
-      setBackendMode(profile.backendMode);
-      setSelectedModel(profile.defaultModel);
-      setRequestType(profile.requestType);
-      const savedMaxTokens = clampMaxTokens(profile.maxTokens || DEFAULT_MAX_TOKENS);
-      const savedAgentToolMaxIterations = clampAgentToolMaxIterations(profile.agentToolMaxIterations || DEFAULT_AGENT_TOOL_MAX_ITERATIONS);
-      setMaxTokens(savedMaxTokens);
-      setMaxTokensInput(String(savedMaxTokens));
-      setAgentToolMaxIterations(savedAgentToolMaxIterations);
-      setAgentToolMaxIterationsInput(String(savedAgentToolMaxIterations));
-      setModels(profile.cachedModels || []);
-      setSetupError(profile.lastConnectionError || "");
-      if (profile.apiKey) {
-        setApiKey(profile.apiKey);
-        setRememberKey(true);
-      }
-      setConnectionStatus(profile.validatedAt && profile.apiKey && profile.defaultModel ? "ready" : "loaded");
-    });
-  }, []);
+  useAppBootstrap({
+    setConversations,
+    setProjects,
+    setTaxonomyItems,
+    setActiveId,
+    setSelectedProjectId,
+    setBackendUrl,
+    setBackendMode,
+    setSelectedModel,
+    setRequestType,
+    setMaxTokens,
+    setMaxTokensInput,
+    setAgentToolMaxIterations,
+    setAgentToolMaxIterationsInput,
+    setModels,
+    setSetupError,
+    setApiKey,
+    setRememberKey,
+    setConnectionStatus,
+  });
 
   useEffect(() => {
     const container = messagesRef.current;
@@ -381,46 +192,57 @@ export function App() {
     };
   }, [codeBlockContextMenu, composerContextMenu, conversationContextMenu, messageContextMenu, projectContextMenu]);
 
-  useEffect(() => {
-    if (connectionStatus !== "ready" || !auth || !selectedModel || isSending || !draft.trim()) {
-      setContextBudget(null);
-      setContextBudgetError("");
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      const userMessage = { role: "user" as const, content: draft.trim() };
-      const messages = activeConversation?.threadId ? [userMessage] : [...(activeConversation?.messages || []), userMessage];
-      getContextBudget(
-        backendUrl,
-        auth,
-        {
-          model: selectedModel,
-          request_type: requestType,
-          stream: false,
-          max_tokens: maxTokens,
-          agent_tool_max_iterations: agentToolMaxIterations,
-          thread_id: activeConversation?.threadId,
-          messages,
-        },
-        maxTokens,
-      )
-        .then((budget) => {
-          setContextBudget(budget);
-          setContextBudgetError("");
-        })
-        .catch((error) => {
-          setContextBudget(null);
-          setContextBudgetError(error instanceof Error ? error.message : "Context budget unavailable.");
-        });
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [activeConversation?.messages, activeConversation?.threadId, agentToolMaxIterations, auth, backendUrl, connectionStatus, draft, isSending, maxTokens, requestType, selectedModel]);
+  const { markConnectionEdited, runSetup, runModelDiagnostic } = useConnectionSetup({
+    backendUrl,
+    selectedModel,
+    requestType,
+    maxTokens,
+    agentToolMaxIterations,
+    auth,
+    rememberKey,
+    discovery,
+    models,
+    connectionStatus,
+    setDiscovery,
+    setBackendMode,
+    setSession,
+    setModels,
+    setRequestType,
+    setConnectionStatus,
+    setSetupError,
+    setDiagnostic,
+    setIsChecking,
+    setIsRunningDiagnostic,
+    setProjects,
+    setSelectedProjectId,
+  });
 
-  function markConnectionEdited() {
-    if (connectionStatus !== "missing") setConnectionStatus("loaded");
-    setSetupError("");
-    setDiagnostic(null);
-  }
+  const { sendMessage, stopActiveGeneration, compactActiveConversationContext } = useChatSession({
+    connectionStatus,
+    auth,
+    selectedModel,
+    draft,
+    isSending,
+    backendUrl,
+    requestType,
+    maxTokens,
+    agentToolMaxIterations,
+    activeConversation,
+    backendMode,
+    agentToolsEnabled,
+    selectedProject,
+    setContextBudget,
+    setContextBudgetError,
+    setDraft,
+    setActiveId,
+    setIsSending,
+    setIsStopping,
+    setStopError,
+    setCompactContextError,
+    setConversations,
+    setIsCompactingContext,
+    activeGenerationRef,
+  });
 
   function focusComposerSelection(selectionStart: number, selectionEnd: number) {
     window.requestAnimationFrame(() => {
@@ -677,95 +499,6 @@ export function App() {
     }
   }
 
-  async function runSetup() {
-    setIsChecking(true);
-    setConnectionStatus("checking");
-    setSetupError("");
-    setDiagnostic(null);
-    try {
-      const discovered = await getClientDiscovery(backendUrl);
-      setDiscovery(discovered);
-      setBackendMode(discovered.mode);
-      if (!auth) throw new Error("Enter an external app key before continuing.");
-      const currentSession = await getClientSession(backendUrl, auth);
-      const safeModels = currentSession.models.length ? currentSession.models : await listModels(backendUrl, auth);
-      const selectedSafeModel = safeModels.find((item) => item.id === selectedModel);
-      const selectedRequestType = selectedSafeModel?.metadata.request_types.includes(requestType || "")
-        ? requestType
-        : selectedSafeModel
-          ? selectedSafeModel.metadata.default_request_type || selectedSafeModel.metadata.request_types[0] || null
-          : requestType;
-      setSession(currentSession);
-      setModels(safeModels);
-      setRequestType(selectedRequestType);
-      await saveProfile({
-        id: "default",
-        name: discovered.mode === "controller" ? "Controller backend" : "Agent backend",
-        backendUrl,
-        backendMode: discovered.mode,
-        authMode: "external_api_key",
-        apiKey: rememberKey ? apiKey : undefined,
-        defaultModel: selectedModel,
-        requestType: selectedRequestType,
-        maxTokens,
-        agentToolMaxIterations,
-        validatedAt: new Date().toISOString(),
-        cachedModels: safeModels,
-      });
-      setConnectionStatus("ready");
-      if (discovered.mode === "controller") {
-        void refreshBackendProjects(backendUrl, auth).catch((error) => {
-          setSetupError(error instanceof Error ? error.message : "Project sync failed.");
-        });
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Setup failed";
-      setSetupError(message);
-      setConnectionStatus("failed");
-      await saveProfile({
-        id: "default",
-        name: "Saved backend",
-        backendUrl,
-        backendMode: discovery?.mode || "unknown",
-        authMode: "external_api_key",
-        apiKey: rememberKey ? apiKey : undefined,
-        defaultModel: selectedModel,
-        requestType,
-        maxTokens,
-        agentToolMaxIterations,
-        lastConnectionError: message,
-        cachedModels: models,
-      });
-    } finally {
-      setIsChecking(false);
-    }
-  }
-
-  async function runModelDiagnostic() {
-    if (!auth) {
-      setSetupError("Cannot run model diagnostic: enter an external app key first.");
-      return;
-    }
-    if (!selectedModel) {
-      setSetupError("Cannot run model diagnostic: select a model first.");
-      return;
-    }
-    setIsRunningDiagnostic(true);
-    setSetupError("");
-    try {
-      const result = await runChatDiagnostics(backendUrl, auth, {
-        model: selectedModel,
-        request_type: requestType,
-        stream: true,
-      });
-      setDiagnostic(result);
-    } catch (error) {
-      setSetupError(error instanceof Error ? error.message : "Model diagnostic failed.");
-    } finally {
-      setIsRunningDiagnostic(false);
-    }
-  }
-
   async function addProject() {
     const name = projectName.trim();
     const root = projectRoot.trim();
@@ -831,177 +564,6 @@ export function App() {
     await deleteTaxonomyItem(id);
     setTaxonomyItems((items) => items.filter((item) => item.id !== id));
     if (editingTaxonomyItemId === id) cancelEditingTaxonomyItem();
-  }
-
-  async function refreshBackendProjects(currentBackendUrl: string, currentAuth: AuthState) {
-    const backendProjects = await listBackendProjects(currentBackendUrl, currentAuth);
-    await Promise.all(backendProjects.map((project) => saveProject(project)));
-    setProjects((items) => mergeProjects(backendProjects, items));
-    if (backendProjects[0]) setSelectedProjectId((current) => current || backendProjects[0].id);
-  }
-
-  async function sendMessage() {
-    if (!auth || !selectedModel || !draft.trim() || isSending) return;
-    const baseMessages = activeConversation?.messages || [];
-    const userMessage: ChatMessage = { role: "user", content: draft.trim() };
-    const conversation: Conversation = activeConversation || {
-      id: newId("chat"),
-      title: draft.trim().slice(0, 48),
-      model: selectedModel,
-      requestType,
-      messages: [],
-      updatedAt: new Date().toISOString(),
-    };
-    const pending: Conversation = {
-      ...conversation,
-      model: selectedModel,
-      requestType,
-      messages: [...baseMessages, userMessage],
-      updatedAt: new Date().toISOString(),
-    };
-    setDraft("");
-    setActiveId(pending.id);
-    setIsSending(true);
-    setIsStopping(false);
-    setStopError("");
-    setCompactContextError("");
-    activeGenerationRef.current = { model: selectedModel, slotId: 0, target: "auto" };
-    const startedAtMs = performance.now();
-    const waiting = withAssistantMessage(pending, {
-      role: "assistant",
-      content: "",
-      pending: true,
-      startedAtMs,
-    });
-    setConversations((items) => upsertConversation(items, waiting));
-    try {
-      let assistant = "";
-      let threadId = pending.threadId;
-      let firstTokenAtMs: number | undefined;
-      let streamTelemetry: ChatTelemetry | undefined;
-      let contextManagement: ContextManagement | undefined;
-      let progressEvents: ChatProgressEvent[] = [];
-      let verification: MessageVerification | undefined;
-      const toolRuntime = agentToolsEnabled ? "agent" : undefined;
-      const outboundMessages = threadId ? [userMessage] : pending.messages;
-      const projectId = projectIdForChatRequest(backendMode, toolRuntime, selectedProject?.id);
-      await streamChat(
-        backendUrl,
-        auth,
-        {
-          model: selectedModel,
-          request_type: requestType,
-          stream: true,
-          max_tokens: maxTokens,
-          agent_tool_max_iterations: agentToolMaxIterations,
-          thread_id: threadId,
-          messages: outboundMessages,
-          tool_runtime: toolRuntime,
-          ...(projectId ? { project_id: projectId } : {}),
-        },
-        (delta) => {
-          if (delta.threadId) threadId = delta.threadId;
-          if (delta.contextManagement) contextManagement = delta.contextManagement;
-          if (delta.progress) progressEvents = mergeProgressEvents(progressEvents, delta.progress);
-          if (delta.progress?.verification) verification = delta.progress.verification;
-          if (delta.verification) verification = delta.verification;
-          if (!delta.content && !delta.telemetry && !delta.progress && !delta.contextManagement && !delta.verification) {
-            setConversations((items) => upsertConversation(items, { ...waiting, threadId }));
-            return;
-          }
-          assistant += delta.content;
-          if (!firstTokenAtMs && delta.content) firstTokenAtMs = performance.now();
-          streamTelemetry = mergeTelemetry(streamTelemetry, delta.telemetry);
-          const streamingMessage: ChatMessage = {
-            role: "assistant",
-            content: assistant,
-            pending: true,
-            startedAtMs,
-            firstTokenAtMs,
-            telemetry: streamTelemetry,
-            contextManagement,
-            progressEvents: progressEvents.length ? progressEvents : undefined,
-            verification,
-          };
-          const streamingConversation = withAssistantMessage({ ...pending, threadId }, streamingMessage);
-          setConversations((items) => upsertConversation(items, streamingConversation));
-        },
-      );
-      const saved = withAssistantMessage({ ...pending, threadId }, finalizeAssistantMessage({
-        role: "assistant",
-        content: assistant || "(empty response)",
-        startedAtMs,
-        firstTokenAtMs,
-        telemetry: streamTelemetry,
-        contextManagement,
-        progressEvents: progressEvents.length ? progressEvents : undefined,
-        verification,
-      }));
-      await saveConversation(saved);
-      setConversations((items) => upsertConversation(items, saved));
-    } catch (error) {
-      const failed = withAssistantMessage(pending, { role: "assistant", content: error instanceof Error ? error.message : "Chat failed" });
-      await saveConversation(failed);
-      setConversations((items) => upsertConversation(items, failed));
-    } finally {
-      activeGenerationRef.current = null;
-      setIsSending(false);
-      setIsStopping(false);
-    }
-  }
-
-  async function stopActiveGeneration() {
-    if (!auth || !activeGenerationRef.current || isStopping) return;
-    setIsStopping(true);
-    setStopError("");
-    try {
-      await stopGeneration(
-        backendUrl,
-        auth,
-        activeGenerationRef.current.model,
-        activeGenerationRef.current.slotId,
-        activeGenerationRef.current.target,
-      );
-    } catch (error) {
-      setStopError(error instanceof Error ? error.message : "Stop generation failed.");
-      setIsStopping(false);
-    }
-  }
-
-  async function compactActiveConversationContext() {
-    if (!auth || !selectedModel || !activeConversation?.threadId || isSending || isCompactingContext) return;
-    setIsCompactingContext(true);
-    setCompactContextError("");
-    try {
-      const result = await compactThread(
-        backendUrl,
-        auth,
-        {
-          threadId: activeConversation.threadId,
-          model: selectedModel,
-          target: "auto",
-          recentMessageCount: 4,
-        },
-      );
-      const message: ChatMessage = {
-        role: "assistant",
-        content: result.summarized ? "Context compacted." : "Context is already compact.",
-        contextManagement: result,
-      };
-      const saved: Conversation = {
-        ...activeConversation,
-        model: selectedModel,
-        requestType,
-        messages: [...activeConversation.messages, message],
-        updatedAt: new Date().toISOString(),
-      };
-      await saveConversation(saved);
-      setConversations((items) => upsertConversation(items, saved));
-    } catch (error) {
-      setCompactContextError(error instanceof Error ? error.message : "Context compaction failed");
-    } finally {
-      setIsCompactingContext(false);
-    }
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -1584,80 +1146,4 @@ export function App() {
       )}
     </main>
   );
-}
-
-function CheckRow({ label, passed }: { label: string; passed?: boolean | null }) {
-  const pending = passed === undefined || passed === null;
-  return (
-    <div className={`check-row ${pending ? "pending" : passed ? "pass" : "fail"}`}>
-      {pending ? <span className="dot" /> : passed ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
-      <span>{label}</span>
-    </div>
-  );
-}
-
-function upsertConversation(items: Conversation[], conversation: Conversation): Conversation[] {
-  const next = [conversation, ...items.filter((item) => item.id !== conversation.id)];
-  return next.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-
-function mergeProjects(primary: Project[], fallback: Project[]): Project[] {
-  const seen = new Set(primary.map((item) => item.id));
-  return [...primary, ...fallback.filter((item) => !seen.has(item.id))].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-
-function upsertTaxonomyItem(items: TaxonomyItem[], item: TaxonomyItem): TaxonomyItem[] {
-  const next = [item, ...items.filter((current) => current.id !== item.id)];
-  return next.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-}
-
-function withAssistantMessage(conversation: Conversation, message: ChatMessage): Conversation {
-  const withoutStreamingAssistant =
-    conversation.messages[conversation.messages.length - 1]?.role === "assistant"
-      ? conversation.messages.slice(0, -1)
-      : conversation.messages;
-  return {
-    ...conversation,
-    messages: [...withoutStreamingAssistant, message],
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-function mergeTelemetry(current: ChatTelemetry | undefined, next: ChatTelemetry | undefined): ChatTelemetry | undefined {
-  if (!current && !next) return undefined;
-  return { ...(current || {}), ...(next || {}) };
-}
-
-function mergeProgressEvents(current: ChatProgressEvent[], next: ChatProgressEvent): ChatProgressEvent[] {
-  const index = current.findIndex((event) => event.id === next.id);
-  if (index < 0) return [...current, next];
-  return current.map((event, currentIndex) => (currentIndex === index ? next : event));
-}
-
-function finalizeAssistantMessage(message: ChatMessage): ChatMessage {
-  const nowMs = performance.now();
-  const start = message.startedAtMs || nowMs;
-  const totalMs = nowMs - start;
-  const ttftMs = message.firstTokenAtMs ? message.firstTokenAtMs - start : undefined;
-  const telemetry = mergeTelemetry(message.telemetry, {
-    ...(ttftMs != null ? { ttftMs } : {}),
-    totalMs,
-  });
-  return {
-    ...message,
-    pending: false,
-    telemetry,
-    progressEvents: message.progressEvents ? finalizeProgressEvents(message.progressEvents) : undefined,
-  };
-}
-
-function finalizeProgressEvents(events: ChatProgressEvent[]): ChatProgressEvent[] {
-  return events.map((event) => {
-    if (event.id !== "assistant-generating") return event;
-    return {
-      ...event,
-      label: "Generated",
-      status: "passed",
-    };
-  });
 }

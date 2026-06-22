@@ -1,33 +1,11 @@
 import { authHeaders, joinUrl, requestJson } from "./http";
-import type { AuthState, ChatMessage, ChatTelemetry, ContextBudget, ContextManagement, MessageVerification, ThreadCompactionResult } from "./types";
+import { formatChatError } from "./chat/errorFormatting";
+import { contextManagementFromChatPayload, threadCompactionFromPayload } from "./chat/mappers";
+import type { ChatCompletionRequest, ChatCompletionResult, CompactThreadRequest } from "./chat/types";
+import type { AuthState, ContextBudget, ThreadCompactionResult } from "./types";
 import { parseSseContent, telemetryFromPayload, verificationFromChatPayload, type ChatStreamDelta } from "./streaming";
 
-export type ChatCompletionRequest = {
-  model: string;
-  messages: ChatMessage[];
-  request_type?: string | null;
-  stream: boolean;
-  max_tokens: number;
-  agent_tool_max_iterations?: number;
-  thread_id?: string;
-  tool_runtime?: "agent";
-  project_id?: string;
-};
-
-export type ChatCompletionResult = {
-  content: string;
-  threadId?: string;
-  telemetry?: ChatTelemetry;
-  contextManagement?: ContextManagement;
-  verification?: MessageVerification;
-};
-
-export type CompactThreadRequest = {
-  threadId: string;
-  model: string;
-  target: string;
-  recentMessageCount: number;
-};
+export type { ChatCompletionRequest, ChatCompletionResult, CompactThreadRequest } from "./chat/types";
 
 export async function getContextBudget(
   baseUrl: string,
@@ -125,7 +103,7 @@ export async function sendChat(baseUrl: string, auth: AuthState, request: ChatCo
     content: payload.choices[0]?.message?.content || "",
     ...(payload.thread_id ? { threadId: payload.thread_id } : {}),
     ...(telemetry ? { telemetry } : {}),
-    ...(payload.context_management ? { contextManagement: contextManagementFromPayload(payload.context_management) } : {}),
+    ...(payload.context_management ? { contextManagement: contextManagementFromChatPayload(payload.context_management) } : {}),
     ...(verification ? { verification } : {}),
   };
 }
@@ -165,57 +143,5 @@ export async function streamChat(
         onToken(token);
       }
     }
-  }
-}
-
-function formatChatError(error: unknown, request: ChatCompletionRequest): Error {
-  const message = error instanceof Error ? error.message : "Chat failed";
-  const detail = backendDetail(message);
-  if (isModelNotRunningDetail(detail)) {
-    return new Error(
-      `The selected model is not up: ${request.model}. Start or load it in Llama Pack, then try again. Backend detail: ${detail}`,
-    );
-  }
-  if (request.tool_runtime !== "agent") return new Error(message);
-  if (!isAgentToolRuntimeDetail(detail)) return new Error(message);
-  const base =
-    "Agent tools could not run: the selected agent has tools disabled or no tool catalog/profile configured. Enable agent tools on that node, then try again.";
-  return new Error(detail ? `${base} Backend detail: ${detail}` : base);
-}
-
-function contextManagementFromPayload(payload: Record<string, unknown>): ContextManagement {
-  return {
-    summarized: payload.summarized === true,
-    ...(typeof payload.summary_event_id === "string" ? { summaryEventId: payload.summary_event_id } : {}),
-    ...(typeof payload.prompt_tokens_before === "number" ? { promptTokensBefore: payload.prompt_tokens_before } : {}),
-    ...(typeof payload.prompt_tokens_after === "number" ? { promptTokensAfter: payload.prompt_tokens_after } : {}),
-  };
-}
-
-function threadCompactionFromPayload(payload: Record<string, unknown>): ThreadCompactionResult {
-  return {
-    ...contextManagementFromPayload(payload),
-    ...(typeof payload.summary === "string" ? { summary: payload.summary } : {}),
-    ...(typeof payload.covered_event_count === "number" ? { coveredEventCount: payload.covered_event_count } : {}),
-  };
-}
-
-function isModelNotRunningDetail(detail: string): boolean {
-  return detail.toLowerCase().includes("model is not running");
-}
-
-function isAgentToolRuntimeDetail(detail: string): boolean {
-  const lower = detail.toLowerCase();
-  return lower.includes("agent tool runtime") || lower.includes("tool catalog") || lower.includes("tools disabled");
-}
-
-function backendDetail(message: string): string {
-  const jsonStart = message.indexOf("{");
-  if (jsonStart < 0) return message.trim();
-  try {
-    const payload = JSON.parse(message.slice(jsonStart)) as { detail?: unknown };
-    return typeof payload.detail === "string" ? payload.detail : message.trim();
-  } catch {
-    return message.trim();
   }
 }

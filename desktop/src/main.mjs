@@ -8,6 +8,7 @@ import { buildOfflinePageLoadOptions } from "./offlinePage.mjs";
 import { isAppReachable } from "./readiness.mjs";
 import { SpitballDesktopStorage } from "./storage.mjs";
 import { registerStorageIpc } from "./storageIpc.mjs";
+import { configureWindowNavigation, loadShell } from "./windowLifecycle.mjs";
 import { buildWindowOptions } from "./windowOptions.mjs";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -17,24 +18,6 @@ let storage = null;
 
 function createWindow() {
   return new BrowserWindow(buildWindowOptions(preloadPath));
-}
-
-async function loadShell(window) {
-  const reachable = await isAppReachable(desktopConfig.appUrl, desktopConfig.healthCheckTimeoutMs);
-  if (reachable) {
-    console.info(`Loading Spitball from ${desktopConfig.appUrl}`);
-    await window.loadURL(desktopConfig.appUrl);
-    return;
-  }
-
-  console.warn(
-    `Spitball Vite app is unavailable at ${desktopConfig.appUrl}. ` +
-      `Start it with ${buildStartAppCommand()}.`,
-  );
-  await window.loadFile(
-    join(moduleDir, "offline.html"),
-    buildOfflinePageLoadOptions(desktopConfig.appUrl, buildStartAppCommand()),
-  );
 }
 
 app.whenReady().then(async () => {
@@ -60,25 +43,33 @@ app.whenReady().then(async () => {
     }
   });
 
-  window.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
-    return { action: "deny" };
-  });
+  configureWindowNavigation(
+    window,
+    {
+      appUrl: desktopConfig.appUrl,
+      shell,
+    },
+    {
+      isInternalNavigationUrl,
+    },
+  );
 
-  window.webContents.on("will-navigate", (event, url) => {
-    if (isInternalNavigationUrl(url, desktopConfig.appUrl)) {
-      return;
-    }
-    event.preventDefault();
-    shell.openExternal(url);
+  await loadShell(window, desktopConfig, {
+    buildStartAppCommand,
+    buildOfflinePageLoadOptions,
+    isAppReachable,
+    moduleDir,
   });
-
-  await loadShell(window);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       const nextWindow = createWindow();
-      loadShell(nextWindow);
+      loadShell(nextWindow, desktopConfig, {
+        buildStartAppCommand,
+        buildOfflinePageLoadOptions,
+        isAppReachable,
+        moduleDir,
+      });
     }
   });
 });
