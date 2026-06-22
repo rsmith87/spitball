@@ -354,6 +354,45 @@ select:focus, input:focus, textarea:focus { border-color: var(--color-accent); b
   background: #fee2e2;
   color: #7f1d1d;
 }
+.verification-status {
+  align-items: center;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  color: #3f3f46;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+  line-height: 1;
+  margin: 0 0 10px;
+  padding: 6px 8px;
+  width: fit-content;
+}
+.verification-status svg {
+  flex: 0 0 auto;
+}
+.verification-status[data-status="verified"] {
+  background: #ecfdf5;
+  border-color: #34d399;
+  color: #065f46;
+}
+.verification-status[data-status="no_code_claims"],
+.verification-status[data-status="unavailable"] {
+  background: #f4f4f5;
+  border-color: #d4d4d8;
+  color: #3f3f46;
+}
+.verification-status[data-status="unverified"],
+.verification-status[data-status="warning"] {
+  background: #fffbeb;
+  border-color: #f59e0b;
+  color: #78350f;
+}
+.verification-status[data-status="failed"] {
+  background: #fef2f2;
+  border-color: #f87171;
+  color: #7f1d1d;
+}
 .verification-notice {
   border: 1px solid #f59e0b;
   background: #fffbeb;
@@ -362,13 +401,18 @@ select:focus, input:focus, textarea:focus { border-color: var(--color-accent); b
   margin: 0 0 10px;
   padding: 8px 10px;
 }
-.verification-notice summary {
-  align-items: center;
+.verification-notice[data-status="failed"] {
+  background: #fef2f2;
+  border-color: #f87171;
+  color: #7f1d1d;
+}
+.verification-notice summary.verification-status {
+  border: 0;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
-  display: flex;
-  font-size: 12px;
-  font-weight: 800;
-  gap: 6px;
+  margin: 0;
+  padding: 0;
 }
 .verification-issues {
   display: grid;

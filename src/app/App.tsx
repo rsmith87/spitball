@@ -120,12 +120,32 @@ function MarkdownMessage({ content, verification, onCodeBlockContextMenu }: { co
 }
 
 function VerificationNotice({ verification }: { verification?: MessageVerification }) {
-  if (!verification || !verification.issues.length) return null;
+  if (!verification) return null;
+
+  const label = verificationStatusLabel(verification);
+  const statusIcon =
+    verification.status === "verified" || verification.status === "no_code_claims" ? (
+      <CheckCircle2 size={14} />
+    ) : verification.status === "failed" ? (
+      <XCircle size={14} />
+    ) : (
+      <AlertTriangle size={14} />
+    );
+
+  if (!verification.issues.length) {
+    return (
+      <div className="verification-status" data-status={verification.status}>
+        {statusIcon}
+        <span>{label}</span>
+      </div>
+    );
+  }
+
   return (
-    <details className="verification-notice" open>
-      <summary>
-        <AlertTriangle size={14} />
-        <span>Needs verification</span>
+    <details className="verification-notice" data-status={verification.status} open>
+      <summary className="verification-status" data-status={verification.status}>
+        {statusIcon}
+        <span>{label}</span>
       </summary>
       <div className="verification-issues">
         {verification.issues.map((issue) => (
@@ -138,6 +158,18 @@ function VerificationNotice({ verification }: { verification?: MessageVerificati
       </div>
     </details>
   );
+}
+
+function verificationStatusLabel(verification: MessageVerification): string {
+  if (verification.issues.length) return "Needs verification";
+  if (verification.status === "verified") return "Verified";
+  if (verification.status === "no_code_claims") return "No code claims";
+  if (verification.status === "unverified") return "Needs verification";
+  if (verification.status === "unavailable") return "Verification unavailable";
+  if (verification.status === "warning") return "Verification warning";
+  if (verification.status === "failed") return "Verification failed";
+  const status: never = verification.status;
+  return status;
 }
 
 function verificationIssueReason(issue: VerificationIssue): string {

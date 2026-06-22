@@ -995,6 +995,54 @@ describe("App setup profile", () => {
     expect(document.querySelector(".verification-inline-issue")?.textContent).toBe("src/fake.py");
   });
 
+  it("renders a verified badge from final streamed assistant metadata", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(async (_baseUrl, _auth, _request, onToken) => {
+      onToken({
+        content: "The claim is backed by source reads.",
+        verification: {
+          status: "verified",
+          issues: [],
+        },
+      });
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText("Agent tools"));
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "verify this");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("Verified")).not.toBeNull());
+    expect(document.querySelector('.verification-status[data-status="verified"]')).not.toBeNull();
+    expect(screen.queryByText("Unverified claim")).toBeNull();
+  });
+
+  it("renders a no code claims badge from final streamed assistant metadata", async () => {
+    vi.mocked(streamChat).mockImplementationOnce(async (_baseUrl, _auth, _request, onToken) => {
+      onToken({
+        content: "This answer does not make code graph claims.",
+        verification: {
+          status: "no_code_claims",
+          issues: [],
+        },
+      });
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText("Agent tools"));
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "verify this");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(screen.getByText("No code claims")).not.toBeNull());
+    expect(document.querySelector('.verification-status[data-status="no_code_claims"]')).not.toBeNull();
+    expect(screen.queryByText("Unverified claim")).toBeNull();
+  });
+
   it("opens setup controls from the Settings sidebar item", async () => {
     const user = userEvent.setup();
     render(<App />);
