@@ -845,7 +845,10 @@ describe("App setup profile", () => {
     await user.keyboard("{Enter}");
 
     await waitFor(() => expect(streamChat).toHaveBeenCalled());
-    expect(vi.mocked(streamChat).mock.calls[0][2]).toMatchObject({ tool_runtime: "agent" });
+    expect(vi.mocked(streamChat).mock.calls[0][2]).toMatchObject({
+      tool_runtime: "agent",
+      project_id: "project-llama-pack",
+    });
   });
 
   it("streams chat when agent tools are enabled", async () => {
@@ -867,6 +870,7 @@ describe("App setup profile", () => {
     expect(vi.mocked(streamChat).mock.calls[0][2]).toMatchObject({
       stream: true,
       tool_runtime: "agent",
+      project_id: "project-llama-pack",
       max_tokens: 1024,
       agent_tool_max_iterations: 12,
     });

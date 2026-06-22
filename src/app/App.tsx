@@ -887,6 +887,7 @@ export function App() {
           thread_id: threadId,
           messages: outboundMessages,
           tool_runtime: toolRuntime,
+          project_id: selectedProject?.id,
         },
         (delta) => {
           if (delta.threadId) threadId = delta.threadId;

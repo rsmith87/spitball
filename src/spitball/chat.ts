@@ -11,6 +11,7 @@ export type ChatCompletionRequest = {
   agent_tool_max_iterations?: number;
   thread_id?: string;
   tool_runtime?: "agent";
+  project_id?: string;
 };
 
 export type ChatCompletionResult = {
