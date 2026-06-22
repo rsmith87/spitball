@@ -617,6 +617,7 @@ describe("App setup profile", () => {
     await waitFor(() => expect(streamChat).toHaveBeenCalled());
     expect(sendChat).not.toHaveBeenCalled();
     expect(vi.mocked(streamChat).mock.calls[0][2]).toMatchObject({ stream: true, max_tokens: 1024 });
+    expect(vi.mocked(streamChat).mock.calls[0][2]).not.toHaveProperty("project_id");
   });
 
   it("renders assistant markdown in streamed responses", async () => {
@@ -835,6 +836,28 @@ describe("App setup profile", () => {
   });
 
   it("sends agent tool runtime when agent tools are enabled", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText("Agent tools"));
+    const composer = await screen.findByPlaceholderText("Send a message to your private backend");
+    await user.clear(composer);
+    await user.type(composer, "check workspace");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalled());
+    expect(vi.mocked(streamChat).mock.calls[0][2]).toMatchObject({
+      tool_runtime: "agent",
+      project_id: "project-llama-pack",
+    });
+  });
+
+  it("sends project id for direct agent backends", async () => {
+    vi.mocked(getProfile).mockResolvedValueOnce({
+      ...savedProfile,
+      name: "Agent backend",
+      backendMode: "agent",
+    });
     const user = userEvent.setup();
     render(<App />);
 

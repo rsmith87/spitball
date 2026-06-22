@@ -87,6 +87,12 @@ function contextBudgetWarning(budget: ContextBudget): string {
   return "";
 }
 
+function projectIdForChatRequest(backendMode: string, toolRuntime: "agent" | undefined, selectedProjectId: string | undefined): string | undefined {
+  if (toolRuntime !== "agent") return undefined;
+  if (backendMode !== "agent" && backendMode !== "controller") return undefined;
+  return selectedProjectId;
+}
+
 function MarkdownMessage({ content, verification, onCodeBlockContextMenu }: { content: string; verification?: MessageVerification; onCodeBlockContextMenu: (event: ReactMouseEvent<HTMLDivElement>, code: string) => void }) {
   function handleContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     const target = event.target;
@@ -236,6 +242,7 @@ function requireClipboard(action: string): Clipboard {
 
 export function App() {
   const [backendUrl, setBackendUrl] = useState("http://mac-mini.local");
+  const [backendMode, setBackendMode] = useState("unknown");
   const [apiKey, setApiKey] = useState("");
   const [rememberKey, setRememberKey] = useState(false);
   const [discovery, setDiscovery] = useState<ClientDiscovery | null>(null);
@@ -321,6 +328,7 @@ export function App() {
     void getProfile("default").then((profile) => {
       if (!profile) return;
       setBackendUrl(profile.backendUrl);
+      setBackendMode(profile.backendMode);
       setSelectedModel(profile.defaultModel);
       setRequestType(profile.requestType);
       const savedMaxTokens = clampMaxTokens(profile.maxTokens || DEFAULT_MAX_TOKENS);
@@ -677,6 +685,7 @@ export function App() {
     try {
       const discovered = await getClientDiscovery(backendUrl);
       setDiscovery(discovered);
+      setBackendMode(discovered.mode);
       if (!auth) throw new Error("Enter an external app key before continuing.");
       const currentSession = await getClientSession(backendUrl, auth);
       const safeModels = currentSession.models.length ? currentSession.models : await listModels(backendUrl, auth);
@@ -875,6 +884,7 @@ export function App() {
       let verification: MessageVerification | undefined;
       const toolRuntime = agentToolsEnabled ? "agent" : undefined;
       const outboundMessages = threadId ? [userMessage] : pending.messages;
+      const projectId = projectIdForChatRequest(backendMode, toolRuntime, selectedProject?.id);
       await streamChat(
         backendUrl,
         auth,
@@ -887,7 +897,7 @@ export function App() {
           thread_id: threadId,
           messages: outboundMessages,
           tool_runtime: toolRuntime,
-          project_id: selectedProject?.id,
+          ...(projectId ? { project_id: projectId } : {}),
         },
         (delta) => {
           if (delta.threadId) threadId = delta.threadId;
